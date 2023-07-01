@@ -1,3 +1,3 @@
-# PROJECT_NAME
+# libplanetgen
 
-PROJECT_BRIEF
+A planetary terrain generation library

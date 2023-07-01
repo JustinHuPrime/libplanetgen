@@ -1,19 +1,19 @@
 # Copyright 2023 Justin Hu
 #
-# This file is part of PROJECT_NAME.
+# This file is part of libplanetgen.
 #
-# PROJECT_NAME is free software: you can redistribute it and/or modify it under
+# libplanetgen is free software: you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
 # Foundation, either version 3 of the License, or (at your option) any later
 # version.
 #
-# PROJECT_NAME is distributed in the hope that it will be useful, but WITHOUT
+# libplanetgen is distributed in the hope that it will be useful, but WITHOUT
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 # FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
 # details.
 #
 # You should have received a copy of the GNU General Public License along with
-# PROJECT_NAME. If not, see <https://www.gnu.org/licenses/>.
+# libplanetgen. If not, see <https://www.gnu.org/licenses/>.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -60,8 +60,8 @@ TDEPDIR := $(DEPDIRPREFIX)/$(TESTSUFFIX)
 TDEPS := $(patsubst $(TSRCDIR)/%.cc,$(TDEPDIR)/%.dep,$(TSRCS))
 
 # final executable name
-EXENAME := PROJECT_NAME
-TEXENAME := PROJECT_NAME-test
+EXENAME := libplanetgen.so
+TEXENAME := libplanetgen-test
 
 
 # compiler options
@@ -124,7 +124,7 @@ install:
 
 $(EXENAME): $(OBJS)
 	@$(ECHO) "Linking $@"
-	@$(CXX) -o $(EXENAME) $(OPTIONS) $(OBJS) $(LIBS)
+	@$(CXX) -o $(EXENAME) $(OPTIONS) -shared $(OBJS) $(LIBS)
 
 $(OBJS): $$(patsubst $(OBJDIR)/%.o,$(SRCDIR)/%.cc,$$@) $$(patsubst $(OBJDIR)/%.o,$(DEPDIR)/%.dep,$$@) | $$(dir $$@)
 	@$(ECHO) "Compiling $@"
