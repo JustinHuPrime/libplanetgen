@@ -17,11 +17,5 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <iostream>
-
-using namespace std;
-
-int main() {
-  cout << "Hello, World!" << endl;
-  return 0;
-}
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>

@@ -82,13 +82,15 @@ WARNINGS := -pedantic -pedantic-errors -Wall -Wextra -Wdouble-promotion\
 -Wnon-virtual-dtor -Weffc++ -Wstrict-null-sentinel -Wold-style-cast\
 -Woverloaded-virtual -Wsign-promo -Wunused -Wdisabled-optimization
 
-OPTIONS := -std=c++20 -D_POSIX_C_SOURCE=202207L -I$(SRCDIR) -fPIC\
+OPTIONS := -std=c++20 -D_POSIX_C_SOURCE=202307L -I$(SRCDIR) -fPIC\
 #$(shell pkg-config --cflags )
-TOPTIONS := -I$(TSRCDIR) -Ilibs/Catch2/src -Ilibs/Catch2/Build/generated-includes
+TOPTIONS := -I$(TSRCDIR) -Ilibs/Catch2/src -Ilibs/Catch2/Build/generated-includes -Ilibs/stb\
+#$(shell pkg-config --cflags )
 LIBS := #$(shell pkg-config --libs )
-TLIBS := libs/Catch2/Build/src/libCatch2Main.a libs/Catch2/Build/src/libCatch2.a
+TLIBS := libs/Catch2/Build/src/libCatch2Main.a libs/Catch2/Build/src/libCatch2.a\
+#$(shell pkg-config --libs )
 
-DEBUGOPTIONS := -Og -ggdb
+DEBUGOPTIONS := -O0 -ggdb
 RELEASEOPTIONS := -O3 -DNDEBUG
 
 

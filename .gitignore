@@ -3,3 +3,4 @@ deps/
 docs/
 libplanetgen.so
 libplanetgen-test
+*.png
