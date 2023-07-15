@@ -48,7 +48,16 @@ constexpr float TRIANGLE_INTERSECTION_EPSILON = 1e-9f;
 
 TriangleTerrainTreeNode::TriangleTerrainTreeNode(
     array<vec3, 3> const &vertices) noexcept
-    : vertices(vertices) {}
+    : vertices(vertices) {
+#ifndef NDEBUG
+  // invariant - this triangle starts approximately equilateral
+  float side0 = length(vertices[0] - vertices[1]);
+  float side1 = length(vertices[1] - vertices[2]);
+  float side2 = length(vertices[2] - vertices[0]);
+  assert(epsilonEqual(side0 / side1, 1.f, 1e-3f));
+  assert(epsilonEqual(side1 / side2, 1.f, 1e-3f));
+#endif
+}
 bool TriangleTerrainTreeNode::contains(vec2 const &location) noexcept {
   // Moller-Trumbore algorithm - see
   // https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
@@ -133,8 +142,25 @@ TerrainData &QuadTerrainTreeNode::operator[](vec2 const &location) noexcept {
               [&location](unique_ptr<TriangleTerrainTreeNode> const &child) {
                 return child->contains(location);
               });
-  assert(found != children.end());
-  return (**found)[location];
+  if (found != children.end()) {
+    return (**found)[location];
+  } else {
+    found = max_element(
+        children.begin(), children.end(),
+        [&location](unique_ptr<TriangleTerrainTreeNode> const &lhs,
+                    unique_ptr<TriangleTerrainTreeNode> const &rhs) {
+          vec3 rayVector = sphericalToCartesian(location);
+          return dot(rayVector,
+                     accumulate(lhs->getVertices().begin(),
+                                lhs->getVertices().end(), vec3{0, 0, 0}) /
+                         3.f) <
+                 dot(rayVector,
+                     accumulate(rhs->getVertices().begin(),
+                                rhs->getVertices().end(), vec3{0, 0, 0}) /
+                         3.f);
+        });
+    return (**found)[location];
+  }
 }
 void QuadTerrainTreeNode::inflate(float radius) noexcept {
   for_each(children.begin(), children.end(),
@@ -196,7 +222,7 @@ IcosahedronTerrainTreeNode::IcosahedronTerrainTreeNode(
   for (size_t idx = 0; idx < southVertices.size(); ++idx) {
     southVertices[idx] =
         radius * sphericalToCartesian(
-                     vec2{-tropic, M_PIf / 10.f + idx * 2 * M_PIf / 5.f});
+                     vec2{-tropic, 2 * M_PIf / 10.f + idx * 2 * M_PIf / 5.f});
   }
 
   for (size_t idx = 0; idx < 5; ++idx) {
@@ -259,8 +285,25 @@ TerrainData &IcosahedronTerrainTreeNode::operator[](
               [&location](unique_ptr<TriangleTerrainTreeNode> const &child) {
                 return child->contains(location);
               });
-  assert(found != children.end());
-  return (**found)[location];
+  if (found != children.end()) {
+    return (**found)[location];
+  } else {
+    found = max_element(
+        children.begin(), children.end(),
+        [&location](unique_ptr<TriangleTerrainTreeNode> const &lhs,
+                    unique_ptr<TriangleTerrainTreeNode> const &rhs) {
+          vec3 rayVector = sphericalToCartesian(location);
+          return dot(rayVector,
+                     accumulate(lhs->getVertices().begin(),
+                                lhs->getVertices().end(), vec3{0, 0, 0}) /
+                         3.f) <
+                 dot(rayVector,
+                     accumulate(rhs->getVertices().begin(),
+                                rhs->getVertices().end(), vec3{0, 0, 0}) /
+                         3.f);
+        });
+    return (**found)[location];
+  }
 }
 
 EarthlikePlanet::EarthlikePlanet(
