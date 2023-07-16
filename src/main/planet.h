@@ -130,7 +130,8 @@ class IcosahedronTerrainTreeNode final : public TerrainTreeNode {
   std::array<std::unique_ptr<TriangleTerrainTreeNode>, 20> children;
 };
 
-enum class GenerationStatus {
+enum class GenerationStatus : uint8_t {
+  CONSTRUCTION = 0,
   TRIANGULATING,
   DONE,
 };
