@@ -50,7 +50,7 @@ class TerrainTreeNode {
   TerrainTreeNode &operator=(TerrainTreeNode const &) noexcept = default;
   TerrainTreeNode &operator=(TerrainTreeNode &&) noexcept = default;
 
-  virtual TerrainData &operator[](glm::vec2 const &) noexcept = 0;
+  virtual TerrainData &operator[](glm::vec3 const &) noexcept = 0;
 
  private:
 };
@@ -67,7 +67,7 @@ class TriangleTerrainTreeNode : public TerrainTreeNode {
   TriangleTerrainTreeNode &operator=(TriangleTerrainTreeNode &&) noexcept =
       default;
 
-  virtual bool contains(glm::vec2 const &) noexcept;
+  virtual bool contains(glm::vec3 const &) noexcept;
   virtual void inflate(float radius) noexcept;
 
   std::array<glm::vec3, 3> const &getVertices() const noexcept;
@@ -87,7 +87,7 @@ class QuadTerrainTreeNode final : public TriangleTerrainTreeNode {
   QuadTerrainTreeNode &operator=(QuadTerrainTreeNode const &) noexcept = delete;
   QuadTerrainTreeNode &operator=(QuadTerrainTreeNode &&) noexcept = default;
 
-  TerrainData &operator[](glm::vec2 const &) noexcept override;
+  TerrainData &operator[](glm::vec3 const &) noexcept override;
 
   void inflate(float radius) noexcept override;
 
@@ -105,7 +105,7 @@ class LeafTerrainTreeNode final : public TriangleTerrainTreeNode {
   LeafTerrainTreeNode &operator=(LeafTerrainTreeNode const &) noexcept = delete;
   LeafTerrainTreeNode &operator=(LeafTerrainTreeNode &&) noexcept = default;
 
-  TerrainData &operator[](glm::vec2 const &) noexcept override;
+  TerrainData &operator[](glm::vec3 const &) noexcept override;
 
  private:
   TerrainData data;
@@ -124,7 +124,7 @@ class IcosahedronTerrainTreeNode final : public TerrainTreeNode {
   IcosahedronTerrainTreeNode &operator=(
       IcosahedronTerrainTreeNode &&) noexcept = default;
 
-  TerrainData &operator[](glm::vec2 const &) noexcept override;
+  TerrainData &operator[](glm::vec3 const &) noexcept override;
 
  private:
   std::array<std::unique_ptr<TriangleTerrainTreeNode>, 20> children;
@@ -164,6 +164,7 @@ class EarthlikePlanet final {
   EarthlikePlanet &operator=(EarthlikePlanet &&) noexcept = default;
 
   TerrainData &operator[](glm::vec2 const &) noexcept;
+  TerrainData &operator[](glm::vec3 const &) noexcept;
 
  private:
   std::mt19937_64 rngEngine;

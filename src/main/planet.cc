@@ -58,10 +58,9 @@ TriangleTerrainTreeNode::TriangleTerrainTreeNode(
   assert(epsilonEqual(side1 / side2, 1.f, 1e-3f));
 #endif
 }
-bool TriangleTerrainTreeNode::contains(vec2 const &location) noexcept {
+bool TriangleTerrainTreeNode::contains(vec3 const &rayVector) noexcept {
   // Moller-Trumbore algorithm - see
   // https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
-  vec3 rayVector = sphericalToCartesian(location);
 
   vec3 edge1 = vertices[1] - vertices[0];
   vec3 edge2 = vertices[2] - vertices[0];
@@ -136,20 +135,19 @@ QuadTerrainTreeNode::QuadTerrainTreeNode(array<vec3, 3> const &vertices_,
         resolution);
   }
 }
-TerrainData &QuadTerrainTreeNode::operator[](vec2 const &location) noexcept {
+TerrainData &QuadTerrainTreeNode::operator[](vec3 const &rayVector) noexcept {
   auto found =
       find_if(children.begin(), children.end(),
-              [&location](unique_ptr<TriangleTerrainTreeNode> const &child) {
-                return child->contains(location);
+              [&rayVector](unique_ptr<TriangleTerrainTreeNode> const &child) {
+                return child->contains(rayVector);
               });
   if (found != children.end()) {
-    return (**found)[location];
+    return (**found)[rayVector];
   } else {
     found = max_element(
         children.begin(), children.end(),
-        [&location](unique_ptr<TriangleTerrainTreeNode> const &lhs,
-                    unique_ptr<TriangleTerrainTreeNode> const &rhs) {
-          vec3 rayVector = sphericalToCartesian(location);
+        [&rayVector](unique_ptr<TriangleTerrainTreeNode> const &lhs,
+                     unique_ptr<TriangleTerrainTreeNode> const &rhs) {
           return dot(rayVector,
                      accumulate(lhs->getVertices().begin(),
                                 lhs->getVertices().end(), vec3{0, 0, 0}) /
@@ -159,7 +157,7 @@ TerrainData &QuadTerrainTreeNode::operator[](vec2 const &location) noexcept {
                                 rhs->getVertices().end(), vec3{0, 0, 0}) /
                          3.f);
         });
-    return (**found)[location];
+    return (**found)[rayVector];
   }
 }
 void QuadTerrainTreeNode::inflate(float radius) noexcept {
@@ -194,7 +192,7 @@ void QuadTerrainTreeNode::inflate(float radius) noexcept {
 LeafTerrainTreeNode::LeafTerrainTreeNode(
     array<vec3, 3> const &vertices) noexcept
     : TriangleTerrainTreeNode(vertices), data() {}
-TerrainData &LeafTerrainTreeNode::operator[](vec2 const &) noexcept {
+TerrainData &LeafTerrainTreeNode::operator[](vec3 const &) noexcept {
   return data;
 }
 
@@ -279,20 +277,19 @@ IcosahedronTerrainTreeNode::IcosahedronTerrainTreeNode(
 #endif
 }
 TerrainData &IcosahedronTerrainTreeNode::operator[](
-    vec2 const &location) noexcept {
+    vec3 const &rayVector) noexcept {
   auto found =
       find_if(children.begin(), children.end(),
-              [&location](unique_ptr<TriangleTerrainTreeNode> const &child) {
-                return child->contains(location);
+              [&rayVector](unique_ptr<TriangleTerrainTreeNode> const &child) {
+                return child->contains(rayVector);
               });
   if (found != children.end()) {
-    return (**found)[location];
+    return (**found)[rayVector];
   } else {
     found = max_element(
         children.begin(), children.end(),
-        [&location](unique_ptr<TriangleTerrainTreeNode> const &lhs,
-                    unique_ptr<TriangleTerrainTreeNode> const &rhs) {
-          vec3 rayVector = sphericalToCartesian(location);
+        [&rayVector](unique_ptr<TriangleTerrainTreeNode> const &lhs,
+                     unique_ptr<TriangleTerrainTreeNode> const &rhs) {
           return dot(rayVector,
                      accumulate(lhs->getVertices().begin(),
                                 lhs->getVertices().end(), vec3{0, 0, 0}) /
@@ -302,7 +299,7 @@ TerrainData &IcosahedronTerrainTreeNode::operator[](
                                 rhs->getVertices().end(), vec3{0, 0, 0}) /
                          3.f);
         });
-    return (**found)[location];
+    return (**found)[rayVector];
   }
 }
 
@@ -315,6 +312,9 @@ EarthlikePlanet::EarthlikePlanet(
   statusReport = GenerationStatus::DONE;
 }
 TerrainData &EarthlikePlanet::operator[](vec2 const &location) noexcept {
+  return operator[](sphericalToCartesian(location));
+}
+TerrainData &EarthlikePlanet::operator[](vec3 const &location) noexcept {
   return (*data)[location];
 }
 }  // namespace planetgen
