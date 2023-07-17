@@ -21,6 +21,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
@@ -36,15 +37,16 @@ struct Pixel {
   uint8_t r;
   uint8_t g;
   uint8_t b;
-  uint8_t a;
+  uint8_t a = 255;
 };
 
 constexpr size_t HEIGHT = 2048;
 constexpr size_t WIDTH = HEIGHT * 2;
 
-TEST_CASE("Check for no-intersection locations", "[.mapping]") {
+TEST_CASE("Check for no-intersection locations", "[.long]") {
   atomic<GenerationStatus> status;
-  EarthlikePlanet p = EarthlikePlanet(0, 6.371e6f, 50e3f, status);
+  EarthlikePlanet::Config config;
+  EarthlikePlanet p = EarthlikePlanet(status, 0, config);
 
   unique_ptr<Pixel[]> bitmap = make_unique<Pixel[]>(WIDTH * HEIGHT);
 
@@ -55,19 +57,71 @@ TEST_CASE("Check for no-intersection locations", "[.mapping]") {
                static_cast<float>(latIdx) / static_cast<float>(HEIGHT - 1)),
           lerp(0, 2 * M_PIf,
                static_cast<float>(lonIdx) / static_cast<float>(WIDTH - 1))};
-      try {
-        p[location];
-        bitmap[latIdx * WIDTH + lonIdx] = Pixel{0, 0, 0, 255};
-      } catch (runtime_error const &e) {
-        if (e.what() == "icosa"s) {
-          bitmap[latIdx * WIDTH + lonIdx] = Pixel{255, 0, 255, 255};
-        } else {
-          bitmap[latIdx * WIDTH + lonIdx] = Pixel{0, 0, 0, 255};
-        }
-      }
+      p[location];
+      bitmap[latIdx * WIDTH + lonIdx] = Pixel{0, 0, 0, 255};
     }
   }
 
   stbi_write_png("no-intersections.png", WIDTH, HEIGHT, 4, bitmap.get(),
+                 WIDTH * sizeof(Pixel));
+}
+
+array<Pixel, 15> const continentalColours = {
+    Pixel{255, 0, 0},   Pixel{191, 0, 0},   Pixel{127, 0, 0},
+    Pixel{63, 0, 0},    Pixel{0, 255, 0},   Pixel{0, 191, 0},
+    Pixel{0, 127, 0},   Pixel{0, 63, 0},    Pixel{255, 255, 0},
+    Pixel{191, 191, 0}, Pixel{127, 127, 0}, Pixel{63, 63, 0},
+};
+array<Pixel, 23> const oceanicColours = {
+    Pixel{0, 0, 255},   Pixel{0, 0, 232},   Pixel{0, 0, 207},
+    Pixel{0, 0, 185},   Pixel{0, 0, 162},   Pixel{0, 0, 139},
+    Pixel{0, 0, 116},   Pixel{0, 0, 93},    Pixel{0, 0, 70},
+    Pixel{0, 0, 46},    Pixel{0, 0, 23},    Pixel{0, 0, 0},
+    Pixel{0, 255, 255}, Pixel{0, 232, 232}, Pixel{0, 207, 207},
+    Pixel{0, 185, 185}, Pixel{0, 162, 162}, Pixel{0, 139, 139},
+    Pixel{0, 116, 116}, Pixel{0, 93, 93},   Pixel{0, 70, 70},
+    Pixel{0, 46, 46},   Pixel{0, 23, 23},
+};
+
+TEST_CASE("Continental plate map", "[.long]") {
+  atomic<GenerationStatus> status;
+  EarthlikePlanet::Config config;
+  EarthlikePlanet p = EarthlikePlanet(status, 0, config);
+
+  vector<Plate const *> continentalPlates;
+  vector<Plate const *> oceanicPlates;
+  for_each(p.plates.begin(), p.plates.end(),
+           [&continentalPlates, &oceanicPlates](Plate const &p) {
+             if (p.continental) {
+               continentalPlates.push_back(&p);
+             } else {
+               oceanicPlates.push_back(&p);
+             }
+           });
+
+  unique_ptr<Pixel[]> bitmap = make_unique<Pixel[]>(WIDTH * HEIGHT);
+  for (size_t latIdx = 0; latIdx < HEIGHT; ++latIdx) {
+    for (size_t lonIdx = 0; lonIdx < WIDTH; ++lonIdx) {
+      vec2 location = {
+          lerp(M_PI_2f, -M_PI_2f,
+               static_cast<float>(latIdx) / static_cast<float>(HEIGHT - 1)),
+          lerp(0, 2 * M_PIf,
+               static_cast<float>(lonIdx) / static_cast<float>(WIDTH - 1))};
+      TerrainData const &data = p[location];
+      if (data.plate->continental) {
+        bitmap[latIdx * WIDTH + lonIdx] =
+            continentalColours[find(continentalPlates.begin(),
+                                    continentalPlates.end(), data.plate) -
+                               continentalPlates.begin()];
+      } else {
+        bitmap[latIdx * WIDTH + lonIdx] =
+            oceanicColours[find(oceanicPlates.begin(), oceanicPlates.end(),
+                                data.plate) -
+                           oceanicPlates.begin()];
+      }
+    }
+  }
+
+  stbi_write_png("plates.png", WIDTH, HEIGHT, 4, bitmap.get(),
                  WIDTH * sizeof(Pixel));
 }

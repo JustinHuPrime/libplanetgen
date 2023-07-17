@@ -20,6 +20,8 @@
 #include "planet.h"
 
 #include <algorithm>
+#include <cmath>
+#include <execution>
 #include <glm/gtc/epsilon.hpp>
 
 using namespace std;
@@ -44,7 +46,72 @@ constexpr vec3 sphericalToCartesian(vec2 const &latLon) noexcept {
   return vec3{cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon)};
 }
 constexpr float TRIANGLE_INTERSECTION_EPSILON = 1e-9f;
+float angleBetween(vec3 const &a, vec3 const &b) {
+  return acos(glm::clamp(dot(normalize(a), normalize(b)), -1.f, 1.f));
+}
 }  // namespace
+
+Plate::Plate(bool major, bool continental, TerrainData const &center,
+             mt19937_64 &rng, float baseWeight,
+             float maxWeightDeviation) noexcept
+    : major(major), continental(continental), center(center) {
+  uniform_real_distribution<float> distribution =
+      uniform_real_distribution<float>(baseWeight * (1.f - maxWeightDeviation),
+                                       baseWeight * (1.f + maxWeightDeviation));
+  transform(directionalWeights.begin(), directionalWeights.end(),
+            directionalWeights.begin(),
+            [&rng, &distribution](float) { return distribution(rng); });
+}
+float Plate::weightedDistanceTo(TerrainData const &point) const noexcept {
+  // avoid division by zero issues
+  if (&point == &center) {
+    return 0.f;
+  }
+
+  // get unweighted angle
+  float unweightedAngle = angleBetween(center.centroid, point.centroid);
+
+  // project direction to terrain centroid onto center plane
+  vec3 toPoint = point.centroid - center.centroid;
+  vec3 toPointProjected = toPoint - center.normal * dot(toPoint, center.normal);
+
+  // project northward vector onto center plane
+  vec3 north = vec3{0, 1, 0};
+  vec3 northProjected = north - center.normal * dot(north, center.normal);
+
+  // calculate angle between line from center to projected point and center to
+  // north
+  float angle = angleBetween(toPointProjected, northProjected);
+  assert(!isnan(angle));
+
+  // maybe need to subtract from 2pi if toPointProjected is to the left of
+  // northProjected (to make it a reflex angle)
+  if (dot(cross(toPointProjected, northProjected), center.normal) < 0) {
+    angle = 2.f * M_PIf - angle;
+  }
+
+  // find which of the 20 sectors this falls in
+  float sectorSize =
+      2.f * M_PIf / static_cast<float>(directionalWeights.size());
+  size_t sector = static_cast<size_t>(floor(angle / sectorSize)) &
+                  directionalWeights.size();
+
+  float proportion = fmod(angle, sectorSize);
+
+  // lerp between the two weighting anchor points
+  float weight =
+      lerp(directionalWeights[(sector + 1) % directionalWeights.size()],
+           directionalWeights[sector], proportion);
+
+  // apply weighting
+  return glm::clamp(unweightedAngle - weight, 0.f, M_PIf);
+}
+
+TerrainData::TerrainData(std::array<glm::vec3, 3> const &vertices) noexcept
+    : centroid(accumulate(vertices.begin(), vertices.end(), vec3{0, 0, 0}) /
+               3.f),
+      normal(normalize(
+          cross(vertices[1] - vertices[0], vertices[2] - vertices[0]))) {}
 
 TriangleTerrainTreeNode::TriangleTerrainTreeNode(
     array<vec3, 3> const &vertices) noexcept
@@ -160,6 +227,12 @@ TerrainData &QuadTerrainTreeNode::operator[](vec3 const &rayVector) noexcept {
     return (**found)[rayVector];
   }
 }
+void QuadTerrainTreeNode::forEach(function<void(TerrainData &)> const &f) {
+  for_each(children.begin(), children.end(),
+           [&f](unique_ptr<TriangleTerrainTreeNode> const &child) {
+             child->forEach(f);
+           });
+}
 void QuadTerrainTreeNode::inflate(float radius) noexcept {
   for_each(children.begin(), children.end(),
            [&radius](unique_ptr<TriangleTerrainTreeNode> &child) {
@@ -191,9 +264,12 @@ void QuadTerrainTreeNode::inflate(float radius) noexcept {
 
 LeafTerrainTreeNode::LeafTerrainTreeNode(
     array<vec3, 3> const &vertices) noexcept
-    : TriangleTerrainTreeNode(vertices), data() {}
+    : TriangleTerrainTreeNode(vertices), data(vertices) {}
 TerrainData &LeafTerrainTreeNode::operator[](vec3 const &) noexcept {
   return data;
+}
+void LeafTerrainTreeNode::forEach(function<void(TerrainData &)> const &f) {
+  return f(data);
 }
 
 IcosahedronTerrainTreeNode::IcosahedronTerrainTreeNode(
@@ -302,13 +378,235 @@ TerrainData &IcosahedronTerrainTreeNode::operator[](
     return (**found)[rayVector];
   }
 }
+void IcosahedronTerrainTreeNode::forEach(
+    function<void(TerrainData &)> const &f) {
+  for_each(execution::par_unseq, children.begin(), children.end(),
+           [&f](unique_ptr<TriangleTerrainTreeNode> const &child) {
+             child->forEach(f);
+           });
+}
 
-EarthlikePlanet::EarthlikePlanet(
-    uint64_t seed, float radius, float resolution,
-    atomic<GenerationStatus> &statusReport) noexcept
-    : rngEngine(seed), data(), radius(radius), resolution(resolution) {
+EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
+                                 uint64_t seed, Config const &config) noexcept
+    : data() {
+  // step 0: initialization
+
+  // step 0.1: create map structure
   statusReport = GenerationStatus::TRIANGULATING;
-  data = make_unique<IcosahedronTerrainTreeNode>(radius, resolution);
+  data =
+      make_unique<IcosahedronTerrainTreeNode>(config.radius, config.resolution);
+
+  // step 0.2: initialize rng
+  mt19937_64 rng = mt19937_64(seed);
+
+  // step 1: generate plates and heightmap (see
+  // https://www.youtube.com/watch?v=x_Tn66PvTn4)
+
+  // step 1.1: generate plates
+  uniform_real_distribution<float> zeroToOne(0.f, 1.f);
+  uniform_real_distribution<float> negOneToOne(-1.f, 1.f);
+
+  while (plates.size() < config.numMajorPlates + config.numMinorPlates) {
+    bool generatingMajorPlate = plates.size() < config.numMajorPlates;
+
+    // step 1.1.1.1: generate random point
+    float lon = 2.f * M_PIf * zeroToOne(rng);
+    float lat = acos(negOneToOne(rng)) - M_PI_2f;
+    vec3 attempt = sphericalToCartesian(vec2{lat, lon});
+
+    // step 1.1.1.2: require that points be far enough away from existing points
+    if (any_of(plates.begin(), plates.end(),
+               [this, &attempt, &config,
+                &generatingMajorPlate](Plate const &plate) {
+                 if (generatingMajorPlate || plate.major) {
+                   return angleBetween(attempt, plate.center.centroid) <
+                          config.minMajorPlateAngle;
+                 } else {
+                   return angleBetween(attempt, plate.center.centroid) <
+                          config.minMinorPlateAngle;
+                 }
+               })) {
+      continue;
+    }
+
+    // step 1.1.1.3: place point
+    plates.emplace_back(
+        generatingMajorPlate,
+        zeroToOne(rng) > config.oceanicFraction, operator[](attempt), rng,
+        generatingMajorPlate ? config.majorPlateSizeBonus : 0.f,
+        config.maxPlateRoughness);
+  }
+
+  // step 1.1.2: associate terrain tiles to plates
+  data->forEach([this](TerrainData &data) {
+    data.plate = &*min_element(
+        plates.begin(), plates.end(), [&data](Plate const &a, Plate const &b) {
+          return a.weightedDistanceTo(data) < b.weightedDistanceTo(data);
+        });
+  });
+
+  // step 1.2: set plate motion
+
+  // TODO
+
+  // step 1.3: generate heightmap
+
+  // TODO
+
+  // step 2: calculate prevailing winds (see
+  // https://www.youtube.com/watch?v=LifRswfCxFU)
+
+  // step 2.1: generate trade winds
+
+  // TODO
+
+  // step 2.2: generate polar cells
+
+  // TODO
+
+  // step 3.3: generate ferrel cell
+
+  // TODO
+
+  // step 3: calculate currents (see
+  // https://www.youtube.com/watch?v=n_E9UShtyY8)
+
+  // step 3.1: equatorial gyres
+
+  // TODO
+
+  // step 3.2: ferrel gyres
+
+  // TODO
+
+  // step 3.3: circumpolar currents
+
+  // TODO
+
+  // step 3.4: fill in gaps
+
+  // TODO
+
+  // step 3.5: ENSO event zones
+
+  // TODO
+
+  // step 4: calculate biomes and climate (see
+  // https://www.youtube.com/watch?v=5lCbxMZJ4zA and
+  // https://www.youtube.com/watch?v=fag48Nh8PXE)
+
+  // step 4.1: preperatory calculations
+
+  // step 4.1.1: precipitation levels
+
+  // TODO
+
+  // step 4.1.2: temperature levels
+
+  // TODO
+
+  // step 4.1.3: orthographic lift
+
+  // TODO
+
+  // step 4.2: place biomes
+
+  // step 4.2.1: mountain climates
+
+  // TODO
+
+  // step 4.2.2: tropical climates
+
+  // TODO
+
+  // step 4.2.3: continental climates
+
+  // TODO
+
+  // step 4.2.4: polar climates
+
+  // TODO
+
+  // step 5: generate rivers (see
+  // https://www.youtube.com/watch?v=cqMiMKnYk5E)
+
+  // step 5.1: drainage basins
+
+  // TODO
+
+  // step 5.2: river basins
+
+  // TODO
+
+  // step 5.3: primary rivers
+
+  // TODO
+
+  // step 5.4: tributaries
+
+  // TODO
+
+  // step 6: calculate resource distribution (see
+  // https://www.youtube.com/watch?v=b9qvQspSbWc)
+
+  // step 6.1: calculate historical heightmap
+
+  // TODO
+
+  // step 6.2: calculate historical tectonic plates
+
+  // TODO
+
+  // step 6.3: calculate historical currents
+
+  // TODO
+
+  // step 6.4: calculate historical biomes
+
+  // TODO
+
+  // step 6.5: place resources
+
+  // step 6.5.1: coal
+
+  // TODO
+
+  // step 6.5.2: oil
+
+  // TODO
+
+  // step 6.5.3: ores
+
+  // TODO
+
+  // step 7: generate world history
+
+  // step 7.1: generate classical empires
+
+  // TODO
+
+  // step 7.2: form medieval nations
+
+  // TODO
+
+  // step 7.3: form renaissance nations
+
+  // TODO
+
+  // step 7.3: simulate colonization
+
+  // TODO
+
+  // step 7.3: simulate industrial revolution
+
+  // TODO
+
+  // step 7.4: simulate world wars
+
+  // TODO
+
+  // step 7.5: create superpower blocs
+
   statusReport = GenerationStatus::DONE;
 }
 TerrainData &EarthlikePlanet::operator[](vec2 const &location) noexcept {

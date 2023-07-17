@@ -23,13 +23,56 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <glm/glm.hpp>
 #include <memory>
 #include <random>
+#include <vector>
 
 namespace planetgen {
+struct TerrainData;
+struct Plate final {
+  bool major;
+  bool continental;
+
+  TerrainData const &center;
+
+  /**
+   * weight applied to distance in 20 compass directions around a circle
+   * higher weight = larger in that direction
+   */
+  std::array<float, 20> directionalWeights;
+
+  /**
+   * @param major is this a major plate
+   * @param continental is this a continental plate
+   * @param center which terrain node is this centred at
+   * @param rng rng to use to randomly generate directional weights
+   * @param baseWeight base distance weight in all directions
+   * @param maxWeightDeviation maximum deviation allowed in a weight, as a
+   * proportion of the base weight
+   */
+  Plate(bool major, bool continental, TerrainData const &center,
+        std::mt19937_64 &rng, float baseWeight,
+        float maxWeightDeviation) noexcept;
+  Plate(Plate const &) noexcept = default;
+  Plate(Plate &&) noexcept = default;
+
+  ~Plate() noexcept = default;
+
+  Plate &operator=(Plate const &) noexcept = default;
+  Plate &operator=(Plate &&) noexcept = default;
+
+  float weightedDistanceTo(TerrainData const &point) const noexcept;
+};
+
 struct TerrainData final {
-  TerrainData() noexcept = default;
+  glm::vec3 centroid;
+  glm::vec3 normal;
+
+  Plate const *plate;
+
+  TerrainData(std::array<glm::vec3, 3> const &vertices) noexcept;
   TerrainData(TerrainData const &) noexcept = default;
   TerrainData(TerrainData &&) noexcept = default;
 
@@ -51,6 +94,8 @@ class TerrainTreeNode {
   TerrainTreeNode &operator=(TerrainTreeNode &&) noexcept = default;
 
   virtual TerrainData &operator[](glm::vec3 const &) noexcept = 0;
+
+  virtual void forEach(std::function<void(TerrainData &)> const &) = 0;
 
  private:
 };
@@ -88,6 +133,7 @@ class QuadTerrainTreeNode final : public TriangleTerrainTreeNode {
   QuadTerrainTreeNode &operator=(QuadTerrainTreeNode &&) noexcept = default;
 
   TerrainData &operator[](glm::vec3 const &) noexcept override;
+  void forEach(std::function<void(TerrainData &)> const &) override;
 
   void inflate(float radius) noexcept override;
 
@@ -106,6 +152,7 @@ class LeafTerrainTreeNode final : public TriangleTerrainTreeNode {
   LeafTerrainTreeNode &operator=(LeafTerrainTreeNode &&) noexcept = default;
 
   TerrainData &operator[](glm::vec3 const &) noexcept override;
+  void forEach(std::function<void(TerrainData &)> const &) override;
 
  private:
   TerrainData data;
@@ -125,6 +172,7 @@ class IcosahedronTerrainTreeNode final : public TerrainTreeNode {
       IcosahedronTerrainTreeNode &&) noexcept = default;
 
   TerrainData &operator[](glm::vec3 const &) noexcept override;
+  void forEach(std::function<void(TerrainData &)> const &) override;
 
  private:
   std::array<std::unique_ptr<TriangleTerrainTreeNode>, 20> children;
@@ -133,11 +181,59 @@ class IcosahedronTerrainTreeNode final : public TerrainTreeNode {
 enum class GenerationStatus : uint8_t {
   CONSTRUCTION = 0,
   TRIANGULATING,
+  TECTONIC_PLATES,
   DONE,
 };
 
 class EarthlikePlanet final {
  public:
+  struct Config final {
+    /**
+     * planetary radius, in meters (suggested limits are 0.5 - 2 earth radii,
+     * or 3.1855e6 to 12.742e6 meters - for reference, Earth has a radius
+     * of 6.371e6 meters; exceeding these limits may lead to unrealistic
+     * results)
+     */
+    float radius = 6.371e6f;
+    /**
+     * maximum side length of a face, in meters (suggested value of 50e3 meters)
+     * - note; must be significantly less than radius
+     */
+    float resolution = 50e3f;
+    /**
+     * number of major plates to generate (suggested limits are 6-10; Earth has
+     * 8)
+     */
+    size_t numMajorPlates = 8;
+    /**
+     * number of minor plates to generate (suggested limits are 6-14; Earth has
+     * 10)
+     */
+    size_t numMinorPlates = 10;
+    /**
+     * minimum angular separation between major and any other plate centers
+     * (suggest pi/8 radians)
+     */
+    float minMajorPlateAngle = M_PIf / 8.f;
+    /**
+     * minimum angular separation between minor plate and any minor plate
+     * centers (suggest pi/16)
+     */
+    float minMinorPlateAngle = M_PIf / 16.f;
+    /**
+     * base size of major plates, in radians (suggested pi/12 radians)
+     */
+    float majorPlateSizeBonus = M_PIf / 10.f;
+    /**
+     * max plate roughness, as fraction of base size (suggested 0.15 to 0.25)
+     */
+    float maxPlateRoughness = 0.2f;
+    /**
+     * fraction of plates that are oceanic (suggested 0.4 to 0.6)
+     */
+    float oceanicFraction = 0.5f;
+  };
+
   /**
    * Create an earthlike planet's terrain
    *
@@ -145,16 +241,13 @@ class EarthlikePlanet final {
    * this may change in later versions (and a second constructor will be
    * introduced taking the equatorial and polar radii)
    *
+   * @param statusReport output reference that will be updated with status
+   * changes as construction progresses - this constructor will take a while to
+   * run
    * @param seed random number generator seed
-   * @param radius planetary radius, in meters (suggested limits are 0.5 -
-   * 2 earth radii, or 3.1855e6 to 12.742e6 meters - for reference, Earth has a
-   * radius of 6.371e6 meters; exceeding these limits may lead to unrealistic
-   * results)
-   * @param resolution maximum side length of a face, in meters (suggested value
-   * of 50e3 meters) - note; must be significantly less than radius
    */
-  EarthlikePlanet(uint64_t seed, float radius, float resolution,
-                  std::atomic<GenerationStatus> &statusReport) noexcept;
+  EarthlikePlanet(std::atomic<GenerationStatus> &statusReport, uint64_t seed,
+                  Config const &config) noexcept;
 
   EarthlikePlanet(EarthlikePlanet const &) noexcept = delete;
   EarthlikePlanet(EarthlikePlanet &&) noexcept = default;
@@ -167,12 +260,10 @@ class EarthlikePlanet final {
   TerrainData &operator[](glm::vec2 const &) noexcept;
   TerrainData &operator[](glm::vec3 const &) noexcept;
 
- private:
-  std::mt19937_64 rngEngine;
+  std::vector<Plate> plates;
 
+ private:
   std::unique_ptr<TerrainTreeNode> data;
-  float radius;
-  float resolution;
 };
 }  // namespace planetgen
 

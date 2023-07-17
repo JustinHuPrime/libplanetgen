@@ -24,22 +24,26 @@
 using namespace planetgen;
 using namespace std;
 
-TEST_CASE("Can construct planet", "[earthlike][constructor]") {
+TEST_CASE("Can construct planet", "[earthlike][constructor][.long]") {
   atomic<GenerationStatus> status;
-  EarthlikePlanet planet = EarthlikePlanet(0, 6.371e6, 50e3, status);
+  EarthlikePlanet::Config config;
+  EarthlikePlanet planet = EarthlikePlanet(status, 0, config);
   REQUIRE(status == GenerationStatus::DONE);
 }
 
-TEST_CASE("Can get a terrain tile", "[earthlike][constructor]") {
+TEST_CASE("Can get a terrain tile", "[earthlike][constructor][.long]") {
   atomic<GenerationStatus> status;
-  EarthlikePlanet planet = EarthlikePlanet(0, 6.371e6, 50e3, status);
+  EarthlikePlanet::Config config;
+  EarthlikePlanet planet = EarthlikePlanet(status, 0, config);
   planet[glm::vec2{0.f, 0.f}];
   REQUIRE(status == GenerationStatus::DONE);
 }
 
-TEST_CASE("Close-by terrain tiles are identical", "[earthlike][constructor]") {
+TEST_CASE("Close-by terrain tiles are identical",
+          "[earthlike][constructor][.long]") {
   atomic<GenerationStatus> status;
-  EarthlikePlanet planet = EarthlikePlanet(0, 6.371e6, 50e3, status);
+  EarthlikePlanet::Config config;
+  EarthlikePlanet planet = EarthlikePlanet(status, 0, config);
   TerrainData const *tile1 = &planet[glm::vec2{1e-4f, 1e-4f}];
   TerrainData const *tile2 = &planet[glm::vec2{1e-4f, 2e-4f}];
   REQUIRE(tile1 == tile2);
@@ -47,25 +51,30 @@ TEST_CASE("Close-by terrain tiles are identical", "[earthlike][constructor]") {
 }
 
 TEST_CASE("Far-away terrain tiles are not identical",
-          "[earthlike][constructor]") {
+          "[earthlike][constructor][.long]") {
   atomic<GenerationStatus> status;
-  EarthlikePlanet planet = EarthlikePlanet(0, 6.371e6, 50e3, status);
+  EarthlikePlanet::Config config;
+  EarthlikePlanet planet = EarthlikePlanet(status, 0, config);
   TerrainData const *tile1 = &planet[glm::vec2{0.f, 0.f}];
   TerrainData const *tile2 = &planet[glm::vec2{1e-2f, 0.f}];
   REQUIRE(tile1 != tile2);
   REQUIRE(status == GenerationStatus::DONE);
 }
 
-TEST_CASE("Can get a terrain tile near an edge", "[earthlike][constructor]") {
+TEST_CASE("Can get a terrain tile near an edge",
+          "[earthlike][constructor][.long]") {
   atomic<GenerationStatus> status;
-  EarthlikePlanet planet = EarthlikePlanet(0, 6.371e6, 50e3, status);
+  EarthlikePlanet::Config config;
+  EarthlikePlanet planet = EarthlikePlanet(status, 0, config);
   TerrainData const *tile1 = &planet[glm::vec2{M_PIf - 1e-4f, 0}];
   REQUIRE(status == GenerationStatus::DONE);
 }
 
-TEST_CASE("Can get a terrain tile near a corner", "[earthlike][constructor]") {
+TEST_CASE("Can get a terrain tile near a corner",
+          "[earthlike][constructor][.long]") {
   atomic<GenerationStatus> status;
-  EarthlikePlanet planet = EarthlikePlanet(0, 6.371e6, 50e3, status);
+  EarthlikePlanet::Config config;
+  EarthlikePlanet planet = EarthlikePlanet(status, 0, config);
   TerrainData const *tile1 = &planet[glm::vec2{M_PIf, 0}];
   REQUIRE(status == GenerationStatus::DONE);
 }
