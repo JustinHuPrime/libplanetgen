@@ -44,6 +44,16 @@ struct Plate final {
   std::array<float, 20> directionalWeights;
 
   /**
+   * rotation vector about core of planet
+   */
+  glm::vec3 rotationAboutCore;
+  /**
+   * multiply this coefficient with normal to get rotation vector about center
+   * of plate
+   */
+  float rotationAboutPlate;
+
+  /**
    * @param major is this a major plate
    * @param continental is this a continental plate
    * @param center which terrain node is this centred at
@@ -71,6 +81,7 @@ struct TerrainData final {
   glm::vec3 normal;
 
   Plate const *plate;
+  glm::vec3 plateMovement;
 
   TerrainData(std::array<glm::vec3, 3> const &vertices) noexcept;
   TerrainData(TerrainData const &) noexcept = default;
@@ -232,6 +243,10 @@ class EarthlikePlanet final {
      * fraction of plates that are oceanic (suggested 0.4 to 0.6)
      */
     float oceanicFraction = 0.5f;
+    /**
+     * fraction of plate movement from rotation about core (suggested about 2/3)
+     */
+    float coreMovementFraction = 2.f / 3.f;
   };
 
   /**

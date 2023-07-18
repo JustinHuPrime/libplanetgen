@@ -92,6 +92,7 @@ TLIBS := libs/Catch2/Build/src/libCatch2Main.a libs/Catch2/Build/src/libCatch2.a
 
 DEBUGOPTIONS := -O0 -ggdb
 RELEASEOPTIONS := -O3 -DNDEBUG
+PROFILEOPTIONS := $(RELEASEOPTIONS) -pg
 
 
 .PHONY: debug release docs install clean
@@ -112,6 +113,10 @@ release: $(EXENAME) $(TEXENAME)
 	@$(ECHO) "Running tests"
 	@./$(TEXENAME)
 	@$(ECHO) "Done building release!"
+
+profile: OPTIONS := $(OPTIONS) $(PROFILEOPTIONS)
+profile: $(EXENAME) $(TEXENAME)
+	@$(ECHO) "Done building profile!"
 
 docs: $(DOCSDIR)/.timestamp
 

@@ -46,7 +46,7 @@ constexpr vec3 sphericalToCartesian(vec2 const &latLon) noexcept {
   return vec3{cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon)};
 }
 constexpr float TRIANGLE_INTERSECTION_EPSILON = 1e-9f;
-float angleBetween(vec3 const &a, vec3 const &b) {
+float angleBetween(vec3 const &a, vec3 const &b) noexcept {
   return acos(glm::clamp(dot(normalize(a), normalize(b)), -1.f, 1.f));
 }
 }  // namespace
@@ -107,7 +107,7 @@ float Plate::weightedDistanceTo(TerrainData const &point) const noexcept {
   return glm::clamp(unweightedAngle - weight, 0.f, M_PIf);
 }
 
-TerrainData::TerrainData(std::array<glm::vec3, 3> const &vertices) noexcept
+TerrainData::TerrainData(array<vec3, 3> const &vertices) noexcept
     : centroid(accumulate(vertices.begin(), vertices.end(), vec3{0, 0, 0}) /
                3.f),
       normal(normalize(
@@ -447,7 +447,31 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
   // step 1.2: set plate motion
 
-  // TODO
+  // step 1.2.1: generate per-plate motion
+  for_each(plates.begin(), plates.end(),
+           [&zeroToOne, &negOneToOne, &rng, &config](Plate &plate) {
+             float lon = 2.f * M_PIf * zeroToOne(rng);
+             float lat = acos(negOneToOne(rng)) - M_PI_2f;
+             plate.rotationAboutCore = zeroToOne(rng) *
+                                       sphericalToCartesian(vec2{lat, lon}) /
+                                       config.radius;
+             plate.rotationAboutPlate =
+                 negOneToOne(rng) / (config.radius * config.minMajorPlateAngle);
+           });
+
+  // step 1.2.2: calculate per-tile motion
+  // note - rotation about center of plate accounts for a third of movement,
+  // rotation about core of planet accounts for the remaining two thirds
+  data->forEach([&config](TerrainData &data) {
+    vec3 movementFromCore = cross(data.plate->rotationAboutCore, data.centroid);
+    vec3 movementFromRotation =
+
+        cross(data.plate->rotationAboutPlate * data.plate->center.normal,
+              data.centroid - data.plate->center.centroid);
+    data.plateMovement =
+        config.coreMovementFraction * movementFromCore +
+        (1.f - config.coreMovementFraction) * movementFromRotation;
+  });
 
   // step 1.3: generate heightmap
 
