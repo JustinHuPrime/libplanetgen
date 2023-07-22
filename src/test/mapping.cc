@@ -28,53 +28,15 @@
 #include <memory>
 #include <stdexcept>
 
+#include "imgOutput.h"
 #include "planet.h"
 
 using namespace planetgen;
 using namespace std;
 using namespace glm;
 
-struct Pixel {
-  uint8_t r;
-  uint8_t g;
-  uint8_t b;
-  uint8_t a = 255;
-};
-
 constexpr size_t HEIGHT = 2048;
 constexpr size_t WIDTH = HEIGHT * 2;
-
-struct CountingIterator final {
-  size_t value;
-
-  explicit CountingIterator(size_t value) noexcept : value(value) {}
-  CountingIterator(CountingIterator const &) noexcept = default;
-  CountingIterator(CountingIterator &&) noexcept = default;
-
-  ~CountingIterator() noexcept = default;
-
-  CountingIterator &operator=(CountingIterator const &) noexcept = default;
-  CountingIterator &operator=(CountingIterator &&) noexcept = default;
-
-  strong_ordering operator<=>(CountingIterator const &other) const noexcept {
-    return this->value <=> other.value;
-  }
-  bool operator==(CountingIterator const &) const noexcept = default;
-  bool operator!=(CountingIterator const &) const noexcept = default;
-
-  size_t operator*() const noexcept { return value; }
-
-  CountingIterator &operator++() noexcept {
-    ++value;
-    return *this;
-  }
-
-  CountingIterator operator++(int) noexcept {
-    CountingIterator retval = *this;
-    ++*this;
-    return retval;
-  }
-};
 
 TEST_CASE("Check for no-intersection locations", "[.long]") {
   atomic<GenerationStatus> status;
