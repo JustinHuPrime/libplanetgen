@@ -30,10 +30,12 @@
 #include <random>
 
 #include "imgOutput.h"
+#include "util/forEachParallel.h"
 
 using namespace planetgen;
 using namespace std;
 using namespace glm;
+using namespace planetgen::util;
 
 constexpr size_t HEIGHT = 4096;
 constexpr size_t WIDTH = HEIGHT;
@@ -44,17 +46,14 @@ TEST_CASE("Generate simple Perlin noise", "[.long]") {
   PerlinOctave octave = PerlinOctave(rng, 128.f);
 
   unique_ptr<Pixel[]> bitmap = make_unique<Pixel[]>(WIDTH * HEIGHT);
-  for_each(
-      execution::par_unseq, CountingIterator(0), CountingIterator(HEIGHT),
-      [&](size_t y) {
-        for_each(CountingIterator(0), CountingIterator(WIDTH), [&](size_t x) {
-          vec3 location =
-              vec3{static_cast<float>(x), static_cast<float>(y), 0.f};
-          float noise = octave(location);
-          uint8_t value = static_cast<uint8_t>(floor(noise * 128.f + 128.f));
-          bitmap[y * WIDTH + x] = Pixel{value, value, value, 255};
-        });
-      });
+  forEachParallel(CountingIterator(0), CountingIterator(HEIGHT), [&](size_t y) {
+    for_each(CountingIterator(0), CountingIterator(WIDTH), [&](size_t x) {
+      vec3 location = vec3{static_cast<float>(x), static_cast<float>(y), 0.f};
+      float noise = octave(location);
+      uint8_t value = static_cast<uint8_t>(floor(noise * 128.f + 128.f));
+      bitmap[y * WIDTH + x] = Pixel{value, value, value, 255};
+    });
+  });
 
   stbi_write_png("simple-perlin.png", WIDTH, HEIGHT, 4, bitmap.get(),
                  WIDTH * sizeof(Pixel));
@@ -66,17 +65,14 @@ TEST_CASE("Generate fractal Perlin noise", "[.long]") {
   Perlin perlin = Perlin(rng, 512.f, 128.f, 1.0f);
 
   unique_ptr<Pixel[]> bitmap = make_unique<Pixel[]>(WIDTH * HEIGHT);
-  for_each(
-      execution::par_unseq, CountingIterator(0), CountingIterator(HEIGHT),
-      [&](size_t y) {
-        for_each(CountingIterator(0), CountingIterator(WIDTH), [&](size_t x) {
-          vec3 location =
-              vec3{static_cast<float>(x), static_cast<float>(y), 0.f};
-          float noise = perlin(location);
-          uint8_t value = static_cast<uint8_t>(floor(noise * 128.f + 128.f));
-          bitmap[y * WIDTH + x] = Pixel{value, value, value, 255};
-        });
-      });
+  forEachParallel(CountingIterator(0), CountingIterator(HEIGHT), [&](size_t y) {
+    for_each(CountingIterator(0), CountingIterator(WIDTH), [&](size_t x) {
+      vec3 location = vec3{static_cast<float>(x), static_cast<float>(y), 0.f};
+      float noise = perlin(location);
+      uint8_t value = static_cast<uint8_t>(floor(noise * 128.f + 128.f));
+      bitmap[y * WIDTH + x] = Pixel{value, value, value, 255};
+    });
+  });
 
   stbi_write_png("fractal-perlin.png", WIDTH, HEIGHT, 4, bitmap.get(),
                  WIDTH * sizeof(Pixel));

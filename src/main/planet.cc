@@ -22,10 +22,16 @@
 #include <algorithm>
 #include <cmath>
 #include <execution>
+#include <glm/glm.hpp>
 #include <glm/gtc/epsilon.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include "perlin.h"
+#include "util/forEachParallel.h"
 
 using namespace std;
 using namespace glm;
+using namespace planetgen::util;
 
 namespace planetgen {
 namespace {
@@ -49,6 +55,32 @@ constexpr float TRIANGLE_INTERSECTION_EPSILON = 1e-9f;
 float angleBetween(vec3 const &a, vec3 const &b) noexcept {
   return acos(glm::clamp(dot(normalize(a), normalize(b)), -1.f, 1.f));
 }
+vec3 rotateVector(vec3 const &vector, vec3 const &axis, float theta) {
+  return vector * cos(theta) + cross(vector, axis) * sin(theta) +
+         axis * dot(axis, vector) * (1 - cos(theta));
+}
+/**
+ * Get the area of a circle of radius 1 covered by a flat plane terminated some
+ * way along a radius
+ *
+ * @param radiusFraction how far along the circle the plane covers; 0 = edge of
+ * plane tangent to circle, 0.5 = edge of plane is halfway along radius
+ * perpendicular to edge of plane, 1 = plane touches the center of the circle
+ */
+constexpr float circleCoveredAreaFraction(float radiusFraction) {
+  assert(0.f <= radiusFraction <= 1.f);
+
+  // area = area of circle - area subtended by sector whose radii intersect the
+  // circle at the plane's intersection + area within that sector not covered by
+  // the plane
+
+  float areaOfCircle = M_PIf;
+  float areaOfSector = acos(1.f - radiusFraction);
+  float areaOfUncoveredSector =
+      (1.f - radiusFraction) * sqrt(1.f - pow(1.f - radiusFraction, 2.f));
+
+  return (areaOfCircle - areaOfSector + areaOfUncoveredSector) / areaOfCircle;
+}
 }  // namespace
 
 Plate::Plate(bool major, bool continental, TerrainData const &center,
@@ -62,7 +94,8 @@ Plate::Plate(bool major, bool continental, TerrainData const &center,
             directionalWeights.begin(),
             [&rng, &distribution](float) { return distribution(rng); });
 }
-float Plate::weightedDistanceTo(TerrainData const &point) const noexcept {
+float Plate::weightedDistanceTo(TerrainData const &point,
+                                float bias) const noexcept {
   // avoid division by zero issues
   if (&point == &center) {
     return 0.f;
@@ -104,11 +137,12 @@ float Plate::weightedDistanceTo(TerrainData const &point) const noexcept {
            directionalWeights[sector], proportion);
 
   // apply weighting
-  return glm::clamp(unweightedAngle - weight, 0.f, M_PIf);
+  return glm::clamp(unweightedAngle - weight + bias, 0.f, M_PIf);
 }
 
 TerrainData::TerrainData(array<vec3, 3> const &vertices) noexcept
-    : centroid(accumulate(vertices.begin(), vertices.end(), vec3{0, 0, 0}) /
+    : vertices(vertices),
+      centroid(accumulate(vertices.begin(), vertices.end(), vec3{0, 0, 0}) /
                3.f),
       normal(normalize(
           cross(vertices[1] - vertices[0], vertices[2] - vertices[0]))) {}
@@ -380,10 +414,10 @@ TerrainData &IcosahedronTerrainTreeNode::operator[](
 }
 void IcosahedronTerrainTreeNode::forEach(
     function<void(TerrainData &)> const &f) {
-  for_each(execution::par_unseq, children.begin(), children.end(),
-           [&f](unique_ptr<TriangleTerrainTreeNode> const &child) {
-             child->forEach(f);
-           });
+  forEachParallel(children.begin(), children.end(),
+                  [&f](unique_ptr<TriangleTerrainTreeNode> const &child) {
+                    child->forEach(f);
+                  });
 }
 
 EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
@@ -438,10 +472,29 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
   }
 
   // step 1.1.2: associate terrain tiles to plates
-  data->forEach([this](TerrainData &data) {
+  Perlin platePerlin = Perlin(rng, config.maxFeatureSize, config.minFeatureSize,
+                              config.octaveDecay);
+  data->forEach([this, &platePerlin, &config](TerrainData &data) {
     data.plate = &*min_element(
-        plates.begin(), plates.end(), [&data](Plate const &a, Plate const &b) {
-          return a.weightedDistanceTo(data) < b.weightedDistanceTo(data);
+        plates.begin(), plates.end(),
+        [this, &platePerlin, &data, &config](Plate const &a, Plate const &b) {
+          size_t aIdx =
+              find_if(plates.begin(), plates.end(),
+                      [&a](Plate const &compare) { return &compare == &a; }) -
+              plates.begin();
+          size_t bIdx =
+              find_if(plates.begin(), plates.end(),
+                      [&b](Plate const &compare) { return &compare == &b; }) -
+              plates.begin();
+          float bias =
+              platePerlin(data.centroid) * config.maxPlatePerlinRoughness;
+          if (aIdx < bIdx) {
+            return a.weightedDistanceTo(data, bias) <
+                   b.weightedDistanceTo(data, -bias);
+          } else {
+            return a.weightedDistanceTo(data, -bias) <
+                   b.weightedDistanceTo(data, bias);
+          }
         });
   });
 
@@ -475,7 +528,108 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
   // step 1.3: generate heightmap
 
+  // Rules:
+  //
+  // apply base height, then apply plate-boundary-specific changes, finally, add
+  // layer of fractal perlin noise (with max feature size 3000km, min feature
+  // size 50km), ranging from -2km to 4km
+  //
+  // default continental = 500m elevation
+  //
+  // default oceanic = -5km elevation
+  //
+  // Oceanic-continental convergent boundary = max scale of 1000 km, sinusoidal
+  // elevation up to 4km high on continental side
+  //
+  // Oceanic-oceanic convergent boundary = max scale of 500 km, sinusoidal
+  // elevation up to 1km high on one plate's side (lower-numbered plate in
+  // plates list)
+  //
+  // Continental-continental convergent boundary = max scale of 1500 km,
+  // sinusoidal elevation up to 10km on one plate's side (lower-numbered plate
+  // in the plates list)
+  //
+  // Oceanic-oceanic divergent boundary = max scale of 750 km, sawtooth
+  // elevation up to -2km high around boundary
+  //
+  // Continental-continental divergent boundary = inner max scale of 100km, flat
+  // elevation of 500m around boundary; outer max scale of 750km, sawtooth
+  // elevation up to 2.5km high around boundary
+  //
+  // Continental-oceanic divergent boundary = inner max scale of 100km,
+  // elevation -100m on oceanic edges of continental plates
+  //
+  // Continental shelf = for 50-100km on oceanic edges of continental plates,
+  // use -100m elevation
+
   // TODO
+  Perlin elevationPerlin = Perlin(rng, config.maxFeatureSize,
+                                  config.minFeatureSize, config.octaveDecay);
+  Perlin featurePerlin = Perlin(rng, config.maxFeatureSize,
+                                config.minFeatureSize, config.octaveDecay);
+  data->forEach([this, &config, &elevationPerlin,
+                 &featurePerlin](TerrainData &data) {
+    // baseline
+    data.elevation = data.plate->continental
+                         ? config.continentalElevationBaseline
+                         : config.oceanicElevationBaseline;
+
+    unordered_set<TerrainData const *> neighbourhood =
+        neighbourhoodOf(data, std::max({config.continentalShelfMaxSize * 2.f}),
+                        config.resolution / 2.f);
+
+    // Oceanic-continental convergent
+
+    // Oceanic-oceanic convergent
+
+    // Continental-continental convergent
+
+    // Oceanic-oceanic divergent
+
+    // Continental-continental divergent
+
+    // Continental-oceanic divergent
+
+    // continental shelf
+    if (!data.plate->continental) {
+      float shelfRadius =
+          lerp(config.continentalShelfMinSize, config.continentalShelfMaxSize,
+               featurePerlin(data.centroid) / 2.f + 0.5f) *
+          2.f;
+      unordered_set<TerrainData const *> continentalShelf;
+      copy_if(neighbourhood.begin(), neighbourhood.end(),
+              inserter(continentalShelf, continentalShelf.begin()),
+              [&config, &data, &shelfRadius](TerrainData const *neighbour) {
+                return config.radius *
+                           angleBetween(data.centroid, neighbour->centroid) <
+                       shelfRadius;
+              });
+
+      size_t continentalCount =
+          count_if(continentalShelf.begin(), continentalShelf.end(),
+                   [](TerrainData const *neighbour) {
+                     return neighbour->plate->continental;
+                   });
+      // is continental shelf if continental count is what would be expected
+      // from a half-radius cover or more; transitions to not continental shelf
+      // between half-radius cover and 0
+      float continentalFraction = static_cast<float>(continentalCount) /
+                                  static_cast<float>(continentalShelf.size());
+      if (continentalFraction > circleCoveredAreaFraction(0.5f)) {
+        data.elevation += config.continentalShelfElevationBonus;
+      } else if (continentalFraction > 0.f) {
+        data.elevation +=
+            lerp(0.f, config.continentalShelfElevationBonus,
+                 continentalFraction / circleCoveredAreaFraction(0.5f));
+      }
+    }
+
+    // noise
+    data.elevation +=
+        (elevationPerlin(data.centroid) / 2.f + 0.5f) *
+            (config.maxNoiseElevation - config.minNoiseElevation) +
+        config.minNoiseElevation;
+  });
 
   // step 2: calculate prevailing winds (see
   // https://www.youtube.com/watch?v=LifRswfCxFU)
@@ -636,7 +790,39 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 TerrainData &EarthlikePlanet::operator[](vec2 const &location) noexcept {
   return operator[](sphericalToCartesian(location));
 }
+TerrainData const &EarthlikePlanet::operator[](
+    vec2 const &location) const noexcept {
+  return operator[](sphericalToCartesian(location));
+}
 TerrainData &EarthlikePlanet::operator[](vec3 const &location) noexcept {
   return (*data)[location];
+}
+TerrainData const &EarthlikePlanet::operator[](
+    vec3 const &location) const noexcept {
+  return (*data)[location];
+}
+unordered_set<TerrainData const *> EarthlikePlanet::neighbourhoodOf(
+    TerrainData const &center, float radius, float resolution) const noexcept {
+  unordered_set<TerrainData const *> retval;
+  retval.insert(&center);
+  // for each radius from resolution to radius in steps of resolution
+  for (float searchRadius = resolution; searchRadius < radius;
+       searchRadius += resolution) {
+    // for as many points in that circle as are needed to have coverage for the
+    // resolution
+    float circumference = 2.f * M_PIf * searchRadius;
+    float numPoints = std::max(ceil(circumference / resolution), 20.f);
+    vec3 offset =
+        normalize(center.vertices[0] - center.centroid) * searchRadius;
+    for (float angle = 0.f; angle < 2.f * M_PIf;
+         angle += 2.f * M_PIf / numPoints) {
+      // add that to the set of neighbours
+      vec3 searchPoint =
+          center.centroid + rotateVector(offset, center.normal, angle);
+      retval.insert(&operator[](searchPoint));
+    }
+  }
+
+  return retval;
 }
 }  // namespace planetgen

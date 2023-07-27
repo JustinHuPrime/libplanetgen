@@ -39,6 +39,9 @@ class PerlinOctave {
   PerlinOctave &operator=(PerlinOctave const &) noexcept = default;
   PerlinOctave &operator=(PerlinOctave &&) noexcept = default;
 
+  /**
+   * Generates value between -1 and 1
+   */
   float operator()(glm::vec3 const &) const noexcept;
 
  private:
@@ -61,6 +64,9 @@ class Perlin {
   Perlin &operator=(Perlin const &) noexcept = default;
   Perlin &operator=(Perlin &&) noexcept = default;
 
+  /**
+   * Generates value between -1 and 1
+   */
   float operator()(glm::vec3 const &) const noexcept;
 
  private:

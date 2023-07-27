@@ -119,6 +119,6 @@ float Perlin::operator()(vec3 const &location) const noexcept {
       [&location](float rsf, pair<PerlinOctave, float> const &octave) {
         return rsf + (octave.second * octave.first(location));
       });
-  return unscaled / amplitudeSum;
+  return glm::clamp(unscaled / (amplitudeSum / 3.f), -1.f, 1.f);
 }
 }  // namespace planetgen

@@ -27,6 +27,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <random>
+#include <unordered_set>
 #include <vector>
 
 namespace planetgen {
@@ -73,15 +74,18 @@ struct Plate final {
   Plate &operator=(Plate const &) noexcept = default;
   Plate &operator=(Plate &&) noexcept = default;
 
-  float weightedDistanceTo(TerrainData const &point) const noexcept;
+  float weightedDistanceTo(TerrainData const &point, float bias) const noexcept;
 };
 
 struct TerrainData final {
+  std::array<glm::vec3, 3> const &vertices;
   glm::vec3 centroid;
   glm::vec3 normal;
 
   Plate const *plate;
   glm::vec3 plateMovement;
+
+  float elevation;
 
   TerrainData(std::array<glm::vec3, 3> const &vertices) noexcept;
   TerrainData(TerrainData const &) noexcept = default;
@@ -220,7 +224,7 @@ class EarthlikePlanet final {
      * number of minor plates to generate (suggested limits are 6-14; Earth has
      * 10)
      */
-    size_t numMinorPlates = 10;
+    size_t numMinorPlates = 20;
     /**
      * minimum angular separation between major and any other plate centers
      * (suggest pi/8 radians)
@@ -232,13 +236,17 @@ class EarthlikePlanet final {
      */
     float minMinorPlateAngle = M_PIf / 16.f;
     /**
-     * base size of major plates, in radians (suggested pi/12 radians)
+     * base size of major plates, in radians (suggested pi/10 radians)
      */
     float majorPlateSizeBonus = M_PIf / 10.f;
     /**
      * max plate roughness, as fraction of base size (suggested 0.15 to 0.25)
      */
     float maxPlateRoughness = 0.2f;
+    /**
+     * max plate perlin roughness, in radians (suggested pi/30 radians)
+     */
+    float maxPlatePerlinRoughness = M_PIf / 30.f;
     /**
      * fraction of plates that are oceanic (suggested 0.4 to 0.6)
      */
@@ -247,6 +255,46 @@ class EarthlikePlanet final {
      * fraction of plate movement from rotation about core (suggested about 2/3)
      */
     float coreMovementFraction = 2.f / 3.f;
+    /**
+     * max feature size (for terrain noise generator) (suggested ~ 1/2 radius)
+     */
+    float maxFeatureSize = 3000e3f;
+    /**
+     * min feature size (for terrain noise generator) (suggested ~ resolution)
+     */
+    float minFeatureSize = 50e3f;
+    /**
+     * octave decay factor (for terrain noise generator)
+     */
+    float octaveDecay = 1.2f;
+    /**
+     * lowest bias (for terrain noise generator) (suggested -2km)
+     */
+    float minNoiseElevation = -2e3f;
+    /**
+     * highest bias (for terrain noise generator) (suggested 4km)
+     */
+    float maxNoiseElevation = 4e3f;
+    /**
+     * continental elevation baseline (suggested 500m)
+     */
+    float continentalElevationBaseline = 500.f;
+    /**
+     * oceanic elevation baseline (suggested -4km)
+     */
+    float oceanicElevationBaseline = -4e3f;
+    /**
+     * continental shelf additional elevation (suggested 3900m)
+     */
+    float continentalShelfElevationBonus = 3900.f;
+    /**
+     * continental shelf minimum size (suggested 50km)
+     */
+    float continentalShelfMinSize = 50e3f;
+    /**
+     * continental shelf maximum size (suggested 100km)
+     */
+    float continentalShelfMaxSize = 100e3f;
   };
 
   /**
@@ -273,12 +321,17 @@ class EarthlikePlanet final {
   EarthlikePlanet &operator=(EarthlikePlanet &&) noexcept = default;
 
   TerrainData &operator[](glm::vec2 const &) noexcept;
+  TerrainData const &operator[](glm::vec2 const &) const noexcept;
   TerrainData &operator[](glm::vec3 const &) noexcept;
+  TerrainData const &operator[](glm::vec3 const &) const noexcept;
 
   std::vector<Plate> plates;
 
  private:
   std::unique_ptr<TerrainTreeNode> data;
+
+  std::unordered_set<TerrainData const *> neighbourhoodOf(
+      TerrainData const &, float radius, float resolution) const noexcept;
 };
 }  // namespace planetgen
 
