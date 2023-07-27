@@ -185,14 +185,18 @@ TEST_CASE("Elevation map", "[.long][.mapping]") {
       if (data.elevation < 0.f) {
         bitmap[latIdx * WIDTH + lonIdx] =
             Pixel{0, 0,
-                  static_cast<uint8_t>(lerp(
-                      255.f, 0.f, data.elevation / config.minNoiseElevation)),
+                  static_cast<uint8_t>(
+                      lerp(255.f, 0.f,
+                           data.elevation / (config.minNoiseElevation +
+                                             config.oceanicElevationBaseline))),
                   255};
       } else {
         bitmap[latIdx * WIDTH + lonIdx] =
             Pixel{0,
                   static_cast<uint8_t>(lerp(
-                      255.f, 0.f, data.elevation / config.maxNoiseElevation)),
+                      255.f, 0.f,
+                      data.elevation / (config.maxNoiseElevation +
+                                        config.continentalElevationBaseline))),
                   0, 255};
       }
     });
