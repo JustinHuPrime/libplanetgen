@@ -27,11 +27,13 @@
 #include <glm/glm.hpp>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 
 #include "imgOutput.h"
 #include "planet.h"
 #include "util/forEachParallel.h"
+#include "util/geometry.h"
 
 using namespace planetgen;
 using namespace std;
@@ -64,6 +66,52 @@ TEST_CASE("Check for no-intersection locations", "[.long]") {
 
   stbi_write_png("no-intersections.png", WIDTH, HEIGHT, 4, bitmap.get(),
                  WIDTH * sizeof(Pixel));
+}
+
+TEST_CASE("Lookup errors", "[.long]") {
+  atomic<GenerationStatus> status;
+  EarthlikePlanet::Config config;
+  EarthlikePlanet p = EarthlikePlanet(status, 0, config);
+
+  float maxError = 0.f;
+  mutex maxErrorMutex;
+  unique_ptr<Pixel[]> bitmap = make_unique<Pixel[]>(WIDTH * HEIGHT);
+  forEachParallel(
+      CountingIterator(0), CountingIterator(HEIGHT), [&](size_t latIdx) {
+        float localMaxError = 0.f;
+        for_each(
+            CountingIterator(0), CountingIterator(WIDTH), [&](size_t lonIdx) {
+              vec2 location = {lerp(M_PI_2f, -M_PI_2f,
+                                    static_cast<float>(latIdx) /
+                                        static_cast<float>(HEIGHT - 1)),
+                               lerp(0, 2 * M_PIf,
+                                    static_cast<float>(lonIdx) /
+                                        static_cast<float>(WIDTH - 1))};
+
+              vec3 expected = sphericalToCartesian(location) * config.radius;
+              float error = length(p[location].centroid - expected);
+              float linearError =
+                  (glm::clamp(error, 50e3f, config.radius * 2.f * M_PIf / 5.f) -
+                   50e3f) /
+                  (config.radius * 2.f * M_PIf / 5.f - 50e3f);
+              bitmap[latIdx * WIDTH + lonIdx] =
+                  Pixel{static_cast<uint8_t>(floor(lerp(0, 255, linearError))),
+                        0, 0, 255};
+
+              if (error > localMaxError) {
+                localMaxError = error;
+              }
+            });
+
+        scoped_lock _ = scoped_lock(maxErrorMutex);
+        if (localMaxError > maxError) {
+          maxError = localMaxError;
+        }
+      });
+
+  stbi_write_png("lookup-errors.png", WIDTH, HEIGHT, 4, bitmap.get(),
+                 WIDTH * sizeof(Pixel));
+  cout << "Max error: " << maxError << "\n";
 }
 
 array<Pixel, 12> const continentalColours = {
@@ -185,18 +233,18 @@ TEST_CASE("Elevation map", "[.long][.mapping]") {
       if (data.elevation < 0.f) {
         bitmap[latIdx * WIDTH + lonIdx] =
             Pixel{0, 0,
-                  static_cast<uint8_t>(
-                      lerp(255.f, 0.f,
-                           data.elevation / (config.minNoiseElevation +
-                                             config.oceanicElevationBaseline))),
+                  static_cast<uint8_t>(floor(lerp(
+                      255.f, 0.f,
+                      data.elevation / (config.minNoiseElevation +
+                                        config.oceanicElevationBaseline)))),
                   255};
       } else {
         bitmap[latIdx * WIDTH + lonIdx] =
             Pixel{0,
-                  static_cast<uint8_t>(lerp(
+                  static_cast<uint8_t>(floor(lerp(
                       255.f, 0.f,
                       data.elevation / (config.maxNoiseElevation +
-                                        config.continentalElevationBaseline))),
+                                        config.continentalElevationBaseline)))),
                   0, 255};
       }
     });
@@ -204,6 +252,4 @@ TEST_CASE("Elevation map", "[.long][.mapping]") {
 
   stbi_write_png("elevation.png", WIDTH, HEIGHT, 4, bitmap.get(),
                  WIDTH * sizeof(Pixel));
-  cout << "Min elevation: " << minElevation
-       << "\nMax elevation: " << maxElevation << "\n";
 }

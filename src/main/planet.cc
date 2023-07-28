@@ -28,6 +28,7 @@
 
 #include "perlin.h"
 #include "util/forEachParallel.h"
+#include "util/geometry.h"
 
 using namespace std;
 using namespace glm;
@@ -35,22 +36,6 @@ using namespace planetgen::util;
 
 namespace planetgen {
 namespace {
-/**
- * Convert lat-long coordinate ray to OpenGL coordinate system ray
- *
- * Assumes camera is over the prime meridian (e.g. 0 N, 0 E = 0, 0, 1)
- *
- * @param latLon latitude (radians north) and longitude (radians east) (in that
- * order) as a vec2
- *
- * @returns direction vector that points to the same spot as the lat-lon
- * coordinates
- */
-constexpr vec3 sphericalToCartesian(vec2 const &latLon) noexcept {
-  float lat = latLon.s;
-  float lon = latLon.t;
-  return vec3{cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon)};
-}
 constexpr float TRIANGLE_INTERSECTION_EPSILON = 1e-9f;
 float angleBetween(vec3 const &a, vec3 const &b) noexcept {
   return acos(glm::clamp(dot(normalize(a), normalize(b)), -1.f, 1.f));
@@ -150,11 +135,7 @@ float Plate::angleAround(TerrainData const &point) const noexcept {
 }
 
 TerrainData::TerrainData(array<vec3, 3> const &vertices) noexcept
-    : vertices(vertices),
-      centroid(accumulate(vertices.begin(), vertices.end(), vec3{0, 0, 0}) /
-               3.f),
-      normal(normalize(
-          cross(vertices[1] - vertices[0], vertices[2] - vertices[0]))) {}
+    : vertices(vertices) {}
 
 TriangleTerrainTreeNode::TriangleTerrainTreeNode(
     array<vec3, 3> const &vertices) noexcept
@@ -439,7 +420,16 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
   data =
       make_unique<IcosahedronTerrainTreeNode>(config.radius, config.resolution);
 
-  // step 0.2: initialize rng
+  // step 0.2: calculate tile centroids and normals
+  data->forEach([](TerrainData &data) {
+    data.centroid =
+        accumulate(data.vertices.begin(), data.vertices.end(), vec3{0, 0, 0}) /
+        3.f;
+    data.normal = normalize(cross(data.vertices[1] - data.vertices[0],
+                                  data.vertices[2] - data.vertices[0]));
+  });
+
+  // step 0.3: initialize rng
   mt19937_64 rng = mt19937_64(seed);
 
   // step 1: generate plates and heightmap (see
@@ -614,11 +604,6 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
     // continental shelf
     if (data.plate->continental) {
-      // float shelfRadius =
-      //     lerp(config.continentalShelfMinSize,
-      //     config.continentalShelfMaxSize,
-      //          featurePerlin(data.centroid) / 2.f + 0.5f) *
-      //     2.f;
       float shelfSize = config.continentalShelfMaxSize;
       vector<TerrainData const *> oceanicLocalNeighbourhood;
       copy_if(oceanicNeighbourhood.begin(), oceanicNeighbourhood.end(),
