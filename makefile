@@ -90,7 +90,7 @@ LIBS := #$(shell pkg-config --libs )
 TLIBS := libs/Catch2/Build/src/libCatch2Main.a libs/Catch2/Build/src/libCatch2.a\
 #$(shell pkg-config --libs )
 
-DEBUGOPTIONS := -Og -ggdb
+DEBUGOPTIONS := -O3 -ggdb
 RELEASEOPTIONS := -O3 -DNDEBUG
 PROFILEOPTIONS := $(RELEASEOPTIONS) -pg
 
@@ -100,12 +100,6 @@ PROFILEOPTIONS := $(RELEASEOPTIONS) -pg
 .SUFFIXES:
 
 
-release: OPTIONS := $(OPTIONS) $(RELEASEOPTIONS)
-release: $(EXENAME) $(TEXENAME)
-	@$(ECHO) "Running tests"
-	@./$(TEXENAME)
-	@$(ECHO) "Done building release!"
-
 debug: OPTIONS := $(OPTIONS) $(DEBUGOPTIONS)
 debug: $(EXENAME) $(TEXENAME) docs
 	@$(ECHO) "Linting source"
@@ -113,6 +107,12 @@ debug: $(EXENAME) $(TEXENAME) docs
 	@$(ECHO) "Running tests"
 	@./$(TEXENAME)
 	@$(ECHO) "Done building debug!"
+
+release: OPTIONS := $(OPTIONS) $(RELEASEOPTIONS)
+release: $(EXENAME) $(TEXENAME)
+	@$(ECHO) "Running tests"
+	@./$(TEXENAME)
+	@$(ECHO) "Done building release!"
 
 profile: OPTIONS := $(OPTIONS) $(PROFILEOPTIONS)
 profile: $(EXENAME) $(TEXENAME)

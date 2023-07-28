@@ -70,16 +70,18 @@ vec3 rotateVector(vec3 const &vector, vec3 const &axis, float theta) {
 constexpr float circleCoveredAreaFraction(float radiusFraction) {
   assert(0.f <= radiusFraction <= 1.f);
 
-  // area = area of circle - area subtended by sector whose radii intersect the
-  // circle at the plane's intersection + area within that sector not covered by
-  // the plane
+  // area not covered = area of circle - area subtended by sector whose radii
+  // intersect the circle at the plane's intersection + area within that sector
+  // not covered by the plane
+  // area covered = area subtended by sector - area within that sector not
+  // covered
 
   float areaOfCircle = M_PIf;
   float areaOfSector = acos(1.f - radiusFraction);
   float areaOfUncoveredSector =
       (1.f - radiusFraction) * sqrt(1.f - pow(1.f - radiusFraction, 2.f));
 
-  return (areaOfCircle - areaOfSector + areaOfUncoveredSector) / areaOfCircle;
+  return (areaOfSector - areaOfUncoveredSector) / areaOfCircle;
 }
 }  // namespace
 
@@ -104,6 +106,27 @@ float Plate::weightedDistanceTo(TerrainData const &point,
   // get unweighted angle
   float unweightedAngle = angleBetween(center.centroid, point.centroid);
 
+  // get angle around the plate
+  float angle = angleAround(point);
+
+  // find which of the 20 sectors this falls in
+  float sectorSize =
+      2.f * M_PIf / static_cast<float>(directionalWeights.size());
+  size_t sector = static_cast<size_t>(floor(angle / sectorSize)) %
+                  directionalWeights.size();
+
+  float proportion = fmod(angle, sectorSize);
+
+  // lerp between the two weighting anchor points
+  assert(0 <= sector && sector < directionalWeights.size());
+  float weight =
+      lerp(directionalWeights[(sector + 1) % directionalWeights.size()],
+           directionalWeights[sector], proportion);
+
+  // apply weighting
+  return glm::clamp(unweightedAngle - weight + bias, 0.f, M_PIf);
+}
+float Plate::angleAround(TerrainData const &point) const noexcept {
   // project direction to terrain centroid onto center plane
   vec3 toPoint = point.centroid - center.centroid;
   vec3 toPointProjected = toPoint - center.normal * dot(toPoint, center.normal);
@@ -123,21 +146,7 @@ float Plate::weightedDistanceTo(TerrainData const &point,
     angle = 2.f * M_PIf - angle;
   }
 
-  // find which of the 20 sectors this falls in
-  float sectorSize =
-      2.f * M_PIf / static_cast<float>(directionalWeights.size());
-  size_t sector = static_cast<size_t>(floor(angle / sectorSize)) &
-                  directionalWeights.size();
-
-  float proportion = fmod(angle, sectorSize);
-
-  // lerp between the two weighting anchor points
-  float weight =
-      lerp(directionalWeights[(sector + 1) % directionalWeights.size()],
-           directionalWeights[sector], proportion);
-
-  // apply weighting
-  return glm::clamp(unweightedAngle - weight + bias, 0.f, M_PIf);
+  return angle;
 }
 
 TerrainData::TerrainData(array<vec3, 3> const &vertices) noexcept
@@ -298,7 +307,7 @@ void QuadTerrainTreeNode::inflate(float radius) noexcept {
 
 LeafTerrainTreeNode::LeafTerrainTreeNode(
     array<vec3, 3> const &vertices) noexcept
-    : TriangleTerrainTreeNode(vertices), data(vertices) {}
+    : TriangleTerrainTreeNode(vertices), data(this->vertices) {}
 TerrainData &LeafTerrainTreeNode::operator[](vec3 const &) noexcept {
   return data;
 }
@@ -569,14 +578,15 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
                                 config.minFeatureSize, config.octaveDecay);
   data->forEach([this, &config, &elevationPerlin,
                  &featurePerlin](TerrainData &data) {
+    // generate neighbourhood
+    vector<TerrainData const *> neighbourhood =
+        neighbourhoodOf(data, std::max({config.continentalShelfMaxSize * 2.f}),
+                        config.resolution);
+
     // baseline
     data.elevation = data.plate->continental
                          ? config.continentalElevationBaseline
                          : config.oceanicElevationBaseline;
-
-    unordered_set<TerrainData const *> neighbourhood =
-        neighbourhoodOf(data, std::max({config.continentalShelfMaxSize * 2.f}),
-                        config.resolution / 2.f);
 
     // Oceanic-continental convergent
 
@@ -591,44 +601,66 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
     // Continental-oceanic divergent
 
     // continental shelf
-    if (!data.plate->continental) {
-      float shelfRadius =
-          lerp(config.continentalShelfMinSize, config.continentalShelfMaxSize,
-               featurePerlin(data.centroid) / 2.f + 0.5f) *
-          2.f;
-      unordered_set<TerrainData const *> continentalShelf;
+    if (data.plate->continental) {
+      // float shelfRadius =
+      //     lerp(config.continentalShelfMinSize,
+      //     config.continentalShelfMaxSize,
+      //          featurePerlin(data.centroid) / 2.f + 0.5f) *
+      //     2.f;
+      float shelfRadius = config.continentalShelfMaxSize;
+      vector<TerrainData const *> continentalShelf;
       copy_if(neighbourhood.begin(), neighbourhood.end(),
-              inserter(continentalShelf, continentalShelf.begin()),
+              back_inserter(continentalShelf),
               [&config, &data, &shelfRadius](TerrainData const *neighbour) {
                 return config.radius *
                            angleBetween(data.centroid, neighbour->centroid) <
                        shelfRadius;
               });
 
-      size_t continentalCount =
+      size_t oceanicCount =
           count_if(continentalShelf.begin(), continentalShelf.end(),
                    [](TerrainData const *neighbour) {
-                     return neighbour->plate->continental;
+                     return !neighbour->plate->continental;
                    });
-      // is continental shelf if continental count is what would be expected
-      // from a half-radius cover or more; transitions to not continental shelf
-      // between half-radius cover and 0
-      float continentalFraction = static_cast<float>(continentalCount) /
-                                  static_cast<float>(continentalShelf.size());
-      if (continentalFraction > circleCoveredAreaFraction(0.5f)) {
-        data.elevation += config.continentalShelfElevationBonus;
-      } else if (continentalFraction > 0.f) {
-        data.elevation +=
-            lerp(0.f, config.continentalShelfElevationBonus,
-                 continentalFraction / circleCoveredAreaFraction(0.5f));
+
+      // is in oceanic elevation transition between 1 radius cover and 0.75
+      // is continental shelf between 0.75 radius cover and 0.25 radius cover
+      // is in continental elevation transition between 0.25 radius cover and 0
+      float oceanicFraction = static_cast<float>(oceanicCount) /
+                              static_cast<float>(continentalShelf.size());
+      float oceanicStartAreaFraction = circleCoveredAreaFraction(1.f);
+      float shelfStartAreaFraction = circleCoveredAreaFraction(0.75f);
+      float shelfEndAreaFraction = circleCoveredAreaFraction(0.25f);
+      float continentalStartAreaFraction = circleCoveredAreaFraction(0.f);
+      if (oceanicFraction >= shelfStartAreaFraction) {
+        // transition between oceanic at 1 and continental shelf at 0.75
+        float areaRange = oceanicStartAreaFraction - shelfStartAreaFraction;
+        data.elevation = lerp(
+            config.continentalShelfElevation, config.oceanicElevationBaseline,
+            (std::min(oceanicFraction, circleCoveredAreaFraction(1.f)) -
+             shelfStartAreaFraction) /
+                areaRange);
+      } else if (shelfStartAreaFraction > oceanicFraction &&
+                 oceanicFraction >= shelfEndAreaFraction) {
+        // continental shelf
+        data.elevation = config.continentalShelfElevation;
+      } else if (shelfEndAreaFraction > oceanicFraction) {
+        // transition away from continental shelf
+        float areaRange = shelfEndAreaFraction - continentalStartAreaFraction;
+        data.elevation =
+            lerp(config.continentalElevationBaseline,
+                 config.continentalShelfElevation,
+                 (oceanicFraction - continentalStartAreaFraction) / areaRange);
       }
     }
 
     // noise
-    data.elevation +=
-        (elevationPerlin(data.centroid) / 2.f + 0.5f) *
-            (config.maxNoiseElevation - config.minNoiseElevation) +
-        config.minNoiseElevation;
+    float noise = elevationPerlin(data.centroid);
+    if (noise <= 0) {
+      data.elevation += -noise * config.minNoiseElevation;
+    } else {
+      data.elevation += noise * config.maxNoiseElevation;
+    }
   });
 
   // step 2: calculate prevailing winds (see
@@ -801,10 +833,10 @@ TerrainData const &EarthlikePlanet::operator[](
     vec3 const &location) const noexcept {
   return (*data)[location];
 }
-unordered_set<TerrainData const *> EarthlikePlanet::neighbourhoodOf(
+vector<TerrainData const *> EarthlikePlanet::neighbourhoodOf(
     TerrainData const &center, float radius, float resolution) const noexcept {
-  unordered_set<TerrainData const *> retval;
-  retval.insert(&center);
+  unordered_set<TerrainData const *> set;
+  set.insert(&center);
   // for each radius from resolution to radius in steps of resolution
   for (float searchRadius = resolution; searchRadius < radius;
        searchRadius += resolution) {
@@ -819,10 +851,12 @@ unordered_set<TerrainData const *> EarthlikePlanet::neighbourhoodOf(
       // add that to the set of neighbours
       vec3 searchPoint =
           center.centroid + rotateVector(offset, center.normal, angle);
-      retval.insert(&operator[](searchPoint));
+      set.insert(&operator[](searchPoint));
     }
   }
 
+  vector<TerrainData const *> retval;
+  copy(set.begin(), set.end(), back_inserter(retval));
   return retval;
 }
 }  // namespace planetgen

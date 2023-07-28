@@ -75,6 +75,12 @@ struct Plate final {
   Plate &operator=(Plate &&) noexcept = default;
 
   float weightedDistanceTo(TerrainData const &point, float bias) const noexcept;
+
+  /**
+   * Get the angle of a point around the plate where north = 0, east = pi/2,
+   * south = pi, west = 3pi/2
+   */
+  float angleAround(TerrainData const &point) const noexcept;
 };
 
 struct TerrainData final {
@@ -284,17 +290,17 @@ class EarthlikePlanet final {
      */
     float oceanicElevationBaseline = -4e3f;
     /**
-     * continental shelf additional elevation (suggested 3900m)
+     * continental shelf additional elevation (suggested -100m)
      */
-    float continentalShelfElevationBonus = 3900.f;
+    float continentalShelfElevation = -100.f;
     /**
-     * continental shelf minimum size (suggested 50km)
+     * continental shelf minimum size (suggested 0km)
      */
-    float continentalShelfMinSize = 50e3f;
+    float continentalShelfMinSize = 0e3f;
     /**
-     * continental shelf maximum size (suggested 100km)
+     * continental shelf maximum size (suggested 1000km)
      */
-    float continentalShelfMaxSize = 100e3f;
+    float continentalShelfMaxSize = 1000e3f;
   };
 
   /**
@@ -330,7 +336,7 @@ class EarthlikePlanet final {
  private:
   std::unique_ptr<TerrainTreeNode> data;
 
-  std::unordered_set<TerrainData const *> neighbourhoodOf(
+  std::vector<TerrainData const *> neighbourhoodOf(
       TerrainData const &, float radius, float resolution) const noexcept;
 };
 }  // namespace planetgen
