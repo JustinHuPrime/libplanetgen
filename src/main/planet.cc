@@ -582,6 +582,18 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
     vector<TerrainData const *> neighbourhood =
         neighbourhoodOf(data, std::max({config.continentalShelfMaxSize * 2.f}),
                         config.resolution);
+    vector<TerrainData const *> oceanicNeighbourhood;
+    copy_if(neighbourhood.begin(), neighbourhood.end(),
+            back_inserter(oceanicNeighbourhood),
+            [](TerrainData const *neighbour) {
+              return !neighbour->plate->continental;
+            });
+    vector<TerrainData const *> continentalNeighbourhood;
+    copy_if(neighbourhood.begin(), neighbourhood.end(),
+            back_inserter(continentalNeighbourhood),
+            [](TerrainData const *neighbour) {
+              return neighbour->plate->continental;
+            });
 
     // baseline
     data.elevation = data.plate->continental
@@ -607,50 +619,52 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
       //     config.continentalShelfMaxSize,
       //          featurePerlin(data.centroid) / 2.f + 0.5f) *
       //     2.f;
-      float shelfRadius = config.continentalShelfMaxSize;
-      vector<TerrainData const *> continentalShelf;
-      copy_if(neighbourhood.begin(), neighbourhood.end(),
-              back_inserter(continentalShelf),
-              [&config, &data, &shelfRadius](TerrainData const *neighbour) {
+      float shelfSize = config.continentalShelfMaxSize;
+      vector<TerrainData const *> oceanicLocalNeighbourhood;
+      copy_if(oceanicNeighbourhood.begin(), oceanicNeighbourhood.end(),
+              back_inserter(oceanicLocalNeighbourhood),
+              [&config, &data, &shelfSize](TerrainData const *neighbour) {
                 return config.radius *
                            angleBetween(data.centroid, neighbour->centroid) <
-                       shelfRadius;
+                       shelfSize;
               });
 
-      size_t oceanicCount =
-          count_if(continentalShelf.begin(), continentalShelf.end(),
-                   [](TerrainData const *neighbour) {
-                     return !neighbour->plate->continental;
-                   });
+      vector<float> oceanicDistances;
+      transform(oceanicLocalNeighbourhood.begin(),
+                oceanicLocalNeighbourhood.end(),
+                back_inserter(oceanicDistances),
+                [&config, &data](TerrainData const *neighbour) {
+                  return config.radius *
+                         angleBetween(data.centroid, neighbour->centroid);
+                });
 
-      // is in oceanic elevation transition between 1 radius cover and 0.75
-      // is continental shelf between 0.75 radius cover and 0.25 radius cover
-      // is in continental elevation transition between 0.25 radius cover and 0
-      float oceanicFraction = static_cast<float>(oceanicCount) /
-                              static_cast<float>(continentalShelf.size());
-      float oceanicStartAreaFraction = circleCoveredAreaFraction(1.f);
-      float shelfStartAreaFraction = circleCoveredAreaFraction(0.75f);
-      float shelfEndAreaFraction = circleCoveredAreaFraction(0.25f);
-      float continentalStartAreaFraction = circleCoveredAreaFraction(0.f);
-      if (oceanicFraction >= shelfStartAreaFraction) {
-        // transition between oceanic at 1 and continental shelf at 0.75
-        float areaRange = oceanicStartAreaFraction - shelfStartAreaFraction;
-        data.elevation = lerp(
-            config.continentalShelfElevation, config.oceanicElevationBaseline,
-            (std::min(oceanicFraction, circleCoveredAreaFraction(1.f)) -
-             shelfStartAreaFraction) /
-                areaRange);
-      } else if (shelfStartAreaFraction > oceanicFraction &&
-                 oceanicFraction >= shelfEndAreaFraction) {
-        // continental shelf
-        data.elevation = config.continentalShelfElevation;
-      } else if (shelfEndAreaFraction > oceanicFraction) {
-        // transition away from continental shelf
-        float areaRange = shelfEndAreaFraction - continentalStartAreaFraction;
-        data.elevation =
-            lerp(config.continentalElevationBaseline,
-                 config.continentalShelfElevation,
-                 (oceanicFraction - continentalStartAreaFraction) / areaRange);
+      if (!oceanicDistances.empty()) {
+        float shortestOceanicDistance =
+            *min_element(oceanicDistances.begin(), oceanicDistances.end());
+
+        // is in oceanic elevation transition between 0 and shelfSize / 4
+        // is continental shelf between shelfSize / 4 and 3 * shelfSize / 4
+        // is in continental elevation transition between 3 * shelfSize / 4
+        // and shelfSize
+        float shelfStartDistance = 0.25f * shelfSize;
+        float shelfEndDistance = 0.75f * shelfSize;
+        if (shortestOceanicDistance < shelfStartDistance) {
+          // transition between oceanic at 0 and continental shelf at 0.25
+          data.elevation = lerp(config.oceanicElevationBaseline,
+                                config.continentalShelfElevation,
+                                shortestOceanicDistance / shelfStartDistance);
+        } else if (shelfStartDistance <= shortestOceanicDistance &&
+                   shortestOceanicDistance <= shelfEndDistance) {
+          // continental shelf
+          data.elevation = config.continentalShelfElevation;
+        } else if (shortestOceanicDistance > shelfEndDistance) {
+          // transition away from continental shelf
+          float areaRange = shelfSize - shelfEndDistance;
+          data.elevation =
+              lerp(config.continentalShelfElevation,
+                   config.continentalElevationBaseline,
+                   (shortestOceanicDistance - shelfEndDistance) / areaRange);
+        }
       }
     }
 
