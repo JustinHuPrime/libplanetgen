@@ -213,44 +213,65 @@ TEST_CASE("Elevation map", "[.long][.mapping]") {
   EarthlikePlanet::Config config;
   EarthlikePlanet p = EarthlikePlanet(status, 0, config);
 
+  float minElevation = 0.f;
+  float maxElevation = 0.f;
+  mutex elevationMutex;
+  unique_ptr<float[]> elevationMap = make_unique<float[]>(WIDTH * HEIGHT);
+  forEachParallel(
+      CountingIterator(0), CountingIterator(HEIGHT), [&](size_t latIdx) {
+        float localMinElevation = 0.f;
+        float localMaxElevation = 0.f;
+        for_each(CountingIterator(0), CountingIterator(WIDTH),
+                 [&](size_t lonIdx) {
+                   vec2 location = {lerp(M_PI_2f, -M_PI_2f,
+                                         static_cast<float>(latIdx) /
+                                             static_cast<float>(HEIGHT - 1)),
+                                    lerp(0, 2 * M_PIf,
+                                         static_cast<float>(lonIdx) /
+                                             static_cast<float>(WIDTH - 1))};
+                   TerrainData const &data = p[location];
+                   if (data.elevation < localMinElevation) {
+                     localMinElevation = data.elevation;
+                   }
+                   if (data.elevation > localMaxElevation) {
+                     localMaxElevation = data.elevation;
+                   }
+                   elevationMap[latIdx * WIDTH + lonIdx] = data.elevation;
+                 });
+
+        scoped_lock _ = scoped_lock(elevationMutex);
+        if (localMinElevation < minElevation) {
+          minElevation = localMinElevation;
+        }
+        if (localMaxElevation > maxElevation) {
+          maxElevation = localMaxElevation;
+        }
+      });
+
   unique_ptr<Pixel[]> bitmap = make_unique<Pixel[]>(WIDTH * HEIGHT);
-  float minElevation = config.maxNoiseElevation;
-  float maxElevation = config.minNoiseElevation;
-  for_each(CountingIterator(0), CountingIterator(HEIGHT), [&](size_t latIdx) {
-    for_each(CountingIterator(0), CountingIterator(WIDTH), [&](size_t lonIdx) {
-      vec2 location = {
-          lerp(M_PI_2f, -M_PI_2f,
-               static_cast<float>(latIdx) / static_cast<float>(HEIGHT - 1)),
-          lerp(0, 2 * M_PIf,
-               static_cast<float>(lonIdx) / static_cast<float>(WIDTH - 1))};
-      TerrainData const &data = p[location];
-      if (data.elevation < minElevation) {
-        minElevation = data.elevation;
-      }
-      if (data.elevation > maxElevation) {
-        maxElevation = data.elevation;
-      }
-      if (data.elevation < 0.f) {
-        bitmap[latIdx * WIDTH + lonIdx] =
-            Pixel{0, 0,
-                  static_cast<uint8_t>(floor(lerp(
-                      255.f, 0.f,
-                      data.elevation / (config.minNoiseElevation +
-                                        config.oceanicElevationBaseline)))),
-                  255};
-      } else {
-        bitmap[latIdx * WIDTH + lonIdx] =
-            Pixel{0,
-                  static_cast<uint8_t>(floor(lerp(
-                      255.f, 0.f,
-                      data.elevation / (config.maxNoiseElevation +
-                                        config.continentalContinentalElevation +
-                                        config.continentalElevationBaseline)))),
-                  0, 255};
-      }
-    });
-  });
+  forEachParallel(
+      CountingIterator(0), CountingIterator(HEIGHT), [&](size_t latIdx) {
+        for_each(CountingIterator(0), CountingIterator(WIDTH),
+                 [&](size_t lonIdx) {
+                   float elevation = elevationMap[latIdx * WIDTH + lonIdx];
+                   if (elevation < 0.f) {
+                     bitmap[latIdx * WIDTH + lonIdx] = Pixel{
+                         0, 0,
+                         static_cast<uint8_t>(
+                             floor(lerp(255.f, 0.f, elevation / minElevation))),
+                         255};
+                   } else {
+                     bitmap[latIdx * WIDTH + lonIdx] = Pixel{
+                         0,
+                         static_cast<uint8_t>(
+                             floor(lerp(255.f, 0.f, elevation / maxElevation))),
+                         0, 255};
+                   }
+                 });
+      });
 
   stbi_write_png("elevation.png", WIDTH, HEIGHT, 4, bitmap.get(),
                  WIDTH * sizeof(Pixel));
+  cout << "Min elevation: " << minElevation
+       << "\nMax elevation: " << maxElevation << "\n";
 }
