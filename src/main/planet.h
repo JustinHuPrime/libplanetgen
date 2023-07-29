@@ -342,6 +342,50 @@ class EarthlikePlanet final {
      * continental shelf set elevation (suggested -100m)
      */
     float continentalShelfElevation = -100.f;
+    /**
+     * minimum number of hotspot island arcs to generate
+     */
+    size_t minHotspotIslandArcs = 10;
+    /**
+     * maximum number of hotspot island arcs to generate
+     */
+    size_t maxHotspotIslandArcs = 20;
+    /**
+     * minimum length of hotspot island arcs
+     */
+    float minHotspotIslandArcLength = 2000e3f;
+    /**
+     * maximum length of hotspot island arcs
+     */
+    float maxHotspotIslandArcLength = 4000e3f;
+    /**
+     * minimum spacing between hotspot islands
+     */
+    float minHotspotIslandSpacing = 150e3f;
+    /**
+     * maximum spacing between hotspot islands
+     */
+    float maxHotspotIslandSpacing = 300e3f;
+    /**
+     * minimum size of hotspot islands
+     */
+    float minHotspotIslandSize = 25e3f;
+    /**
+     * maximum size of hotspot islands
+     */
+    float maxHotspotIslandSize = 150e3f;
+    /**
+     * minimum additional elevation of hotspot islands
+     */
+    float minHotspotIslandElevation = 2e3f;
+    /**
+     * maximum additional elevation of hotspot islands
+     */
+    float maxHotspotIslandElevation = 8e3f;
+    /**
+     * decay rate for successive hotspot island sizes
+     */
+    float hotspotIslandSizeDecay = 1.5f;
   };
 
   /**
@@ -375,7 +419,7 @@ class EarthlikePlanet final {
   std::vector<Plate> plates;
 
  private:
-  std::unique_ptr<TerrainTreeNode> data;
+  std::unique_ptr<IcosahedronTerrainTreeNode> data;
 
   std::vector<TerrainData const *> neighbourhoodOf(
       TerrainData const &center, float searchRadius,

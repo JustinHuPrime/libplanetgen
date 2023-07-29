@@ -25,6 +25,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/epsilon.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <utility>
 
 #include "perlin.h"
 #include "util/forEachParallel.h"
@@ -40,33 +41,12 @@ constexpr float TRIANGLE_INTERSECTION_EPSILON = 1e-9f;
 float angleBetween(vec3 const &a, vec3 const &b) noexcept {
   return acos(glm::clamp(dot(normalize(a), normalize(b)), -1.f, 1.f));
 }
-vec3 rotateVector(vec3 const &vector, vec3 const &axis, float theta) {
-  return vector * cos(theta) + cross(vector, axis) * sin(theta) +
-         axis * dot(axis, vector) * (1 - cos(theta));
-}
-/**
- * Get the area of a circle of radius 1 covered by a flat plane terminated some
- * way along a radius
- *
- * @param radiusFraction how far along the circle the plane covers; 0 = edge of
- * plane tangent to circle, 0.5 = edge of plane is halfway along radius
- * perpendicular to edge of plane, 1 = plane touches the center of the circle
- */
-constexpr float circleCoveredAreaFraction(float radiusFraction) {
-  assert(0.f <= radiusFraction <= 1.f);
-
-  // area not covered = area of circle - area subtended by sector whose radii
-  // intersect the circle at the plane's intersection + area within that sector
-  // not covered by the plane
-  // area covered = area subtended by sector - area within that sector not
-  // covered
-
-  float areaOfCircle = M_PIf;
-  float areaOfSector = acos(1.f - radiusFraction);
-  float areaOfUncoveredSector =
-      (1.f - radiusFraction) * sqrt(1.f - pow(1.f - radiusFraction, 2.f));
-
-  return (areaOfSector - areaOfUncoveredSector) / areaOfCircle;
+vec3 randomPointInSphere(mt19937_64 &rng) noexcept {
+  uniform_real_distribution<float> zeroToOne(0.f, 1.f);
+  uniform_real_distribution<float> negOneToOne(-1.f, 1.f);
+  float lon = 2.f * M_PIf * zeroToOne(rng);
+  float lat = acos(negOneToOne(rng)) - M_PI_2f;
+  return sphericalToCartesian(vec2{lat, lon});
 }
 }  // namespace
 
@@ -452,9 +432,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
     bool generatingMajorPlate = plates.size() < config.numMajorPlates;
 
     // step 1.1.1.1: generate random point
-    float lon = 2.f * M_PIf * zeroToOne(rng);
-    float lat = acos(negOneToOne(rng)) - M_PI_2f;
-    vec3 attempt = sphericalToCartesian(vec2{lat, lon});
+    vec3 attempt = randomPointInSphere(rng);
 
     // step 1.1.1.2: require that points be far enough away from existing points
     if (any_of(plates.begin(), plates.end(),
@@ -511,11 +489,8 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
   // step 1.2.1: generate per-plate motion
   for_each(plates.begin(), plates.end(),
            [&zeroToOne, &negOneToOne, &rng, &config](Plate &plate) {
-             float lon = 2.f * M_PIf * zeroToOne(rng);
-             float lat = acos(negOneToOne(rng)) - M_PI_2f;
-             plate.rotationAboutCore = zeroToOne(rng) *
-                                       sphericalToCartesian(vec2{lat, lon}) /
-                                       config.radius;
+             plate.rotationAboutCore =
+                 zeroToOne(rng) * randomPointInSphere(rng) / config.radius;
              plate.rotationAboutPlate =
                  negOneToOne(rng) / (config.radius * config.minMajorPlateAngle);
            });
@@ -883,6 +858,91 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
     } else {
       data.elevation += noise * config.maxNoiseElevation;
     }
+  });
+
+  // step 1.4: place volcanic hotspot islands
+
+  size_t hotspotCount = uniform_int_distribution<size_t>(
+      config.minHotspotIslandArcs, config.maxHotspotIslandArcs)(rng);
+  vector<TerrainData const *> hotspotRoots;
+  while (hotspotRoots.size() < hotspotCount) {
+    // select a random point
+    TerrainData const &attempt = operator[](randomPointInSphere(rng));
+
+    // that is oceanic
+    if (attempt.plate->continental) {
+      continue;
+    }
+
+    hotspotRoots.push_back(&attempt);
+  }
+
+  struct Hotspot {
+    TerrainData const *center;
+    float elevation;
+    float width;
+  };
+  vector<Hotspot> hotspots;
+  for_each(
+      hotspotRoots.begin(), hotspotRoots.end(),
+      [this, &hotspots, &config, &rng](TerrainData const *root) {
+        float arcLength = uniform_real_distribution<float>(
+            config.minHotspotIslandArcLength,
+            config.maxHotspotIslandArcLength)(rng);
+        uniform_real_distribution<float> spacingDistribution =
+            uniform_real_distribution<float>(config.minHotspotIslandSpacing,
+                                             config.maxHotspotIslandSpacing);
+        uniform_real_distribution<float> elevationDistribution =
+            uniform_real_distribution<float>(config.minHotspotIslandElevation,
+                                             config.maxHotspotIslandElevation);
+        uniform_real_distribution<float> sizeDistribution =
+            uniform_real_distribution<float>(config.minHotspotIslandSize,
+                                             config.maxHotspotIslandSize);
+
+        // magnitude = sin(1/radius)
+        vec3 axis = cross(normalize(root->centroid + root->plateMovement),
+                          normalize(root->centroid));
+
+        float currentOffset = 0.f;
+        size_t idx = 0;
+        do {
+          vec3 location =
+              cross(root->centroid, currentOffset * axis) + root->centroid;
+          hotspots.push_back({.center = &operator[](location),
+                              .elevation = elevationDistribution(rng) /
+                                           pow(config.hotspotIslandSizeDecay,
+                                               static_cast<float>(idx)),
+                              .width = sizeDistribution(rng)});
+
+          currentOffset += spacingDistribution(rng);
+          ++idx;
+        } while (currentOffset < arcLength);
+      });
+  data->forEach([&hotspots, &config](TerrainData &data) {
+    vector<Hotspot> inRange;
+    copy_if(hotspots.begin(), hotspots.end(), back_inserter(inRange),
+            [&data, &config](Hotspot const &hotspot) {
+              return config.radius *
+                         angleBetween(hotspot.center->centroid, data.centroid) <
+                     hotspot.width;
+            });
+
+    if (inRange.empty()) {
+      return;
+    }
+
+    vector<float> elevationBonuses;
+    transform(inRange.begin(), inRange.end(), back_inserter(elevationBonuses),
+              [&data, &config](Hotspot const &hotspot) {
+                float distance =
+                    config.radius *
+                    angleBetween(hotspot.center->centroid, data.centroid);
+                return hotspot.elevation *
+                       cos(distance * M_PI_2f / hotspot.width);
+              });
+
+    data.elevation +=
+        *max_element(elevationBonuses.begin(), elevationBonuses.end());
   });
 
   // step 2: calculate prevailing winds (see
