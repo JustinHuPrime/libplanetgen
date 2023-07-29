@@ -310,6 +310,22 @@ class EarthlikePlanet final {
      */
     float oceanicOceanicElevation = 5e3f;
     /**
+     * Width of the thinning part of a divergent boundary
+     */
+    float divergentOuterSize = 750e3f;
+    /**
+     * Width of the rift part of a divergent boundary
+     */
+    float divergentInnerSize = 100e3f;
+    /**
+     * Additional elevation of the thinning part of a divergent boundary
+     */
+    float divergentOuterElevation = 2e3f;
+    /**
+     * Additional elevation for the rift part of a divergent boundary
+     */
+    float divergentInnerElevation = 1e3f;
+    /**
      * Continental-continental convergent width (suggested 750km)
      */
     float continentalContinentalSize = 750e3f;

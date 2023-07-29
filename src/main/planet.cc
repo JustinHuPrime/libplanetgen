@@ -556,15 +556,9 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
   // Continental-continental convergent boundary = max scale of 1500 km,
   // sinusoidal elevation up to 10km centered on boundary
   //
-  // Oceanic-oceanic divergent boundary = max scale of 750 km, sinusoidal
-  // elevation down to -2km high around boundary
-  //
-  // Continental-continental divergent boundary = inner max scale of 100km, flat
+  // General divergent boundary = inner max scale of 100km, flat
   // elevation of -500m around boundary; outer max scale of 750km, sinusoidal
   // elevation up to 2.5km high around boundary
-  //
-  // Continental-oceanic divergent boundary = inner max scale of 100km,
-  // elevation -100m on oceanic edges of continental plates
   //
   // Continental shelf = for 50-100km on oceanic edges of continental plates,
   // use -100m elevation
@@ -581,7 +575,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
         data,
         std::max({config.oceanicContinentalSize, config.oceanicOceanicSize,
                   config.continentalContinentalSize,
-                  config.continentalShelfSize}),
+                  config.continentalShelfSize, config.divergentOuterSize}),
         config.radius);
     vector<TerrainData const *> oceanicNeighbourhood;
     copy_if(neighbourhood.begin(), neighbourhood.end(),
@@ -774,14 +768,58 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
       }
     }
 
-    // Oceanic-oceanic divergent
-    // TODO
+    // Divergent
+    {
+      vector<TerrainData const *> localNeighbourhoodForeigners;
+      copy_if(neighbourhood.begin(), neighbourhood.end(),
+              back_inserter(localNeighbourhoodForeigners),
+              [&config, &data](TerrainData const *neighbour) {
+                return config.radius * angleBetween(data.centroid,
+                                                    neighbour->centroid) <
+                           config.continentalContinentalSize &&
+                       neighbour->plate != data.plate;
+              });
 
-    // Continental-continental divergent
-    // TODO
+      vector<float> distances;
+      transform(localNeighbourhoodForeigners.begin(),
+                localNeighbourhoodForeigners.end(), back_inserter(distances),
+                [&config, &data](TerrainData const *neighbour) {
+                  return config.radius *
+                         angleBetween(data.centroid, neighbour->centroid);
+                });
 
-    // Continental-oceanic divergent
-    // TODO
+      if (!distances.empty()) {
+        float shortestDistance =
+            *min_element(distances.begin(), distances.end());
+
+        vector<float> alignments;
+        transform(localNeighbourhoodForeigners.begin(),
+                  localNeighbourhoodForeigners.end(), back_inserter(alignments),
+                  [&data](TerrainData const *neighbour) {
+                    return dot(neighbour->plateMovement - data.plateMovement,
+                               normalize(data.centroid - neighbour->centroid));
+                  });
+        float averageAlignment =
+            accumulate(alignments.begin(), alignments.end(), 0.f) /
+            static_cast<float>(alignments.size());
+
+        if (averageAlignment < 0.f) {
+          if (shortestDistance <
+              -averageAlignment * config.divergentInnerSize) {
+            data.elevation +=
+                -averageAlignment * config.divergentInnerElevation;
+          } else {
+            data.elevation +=
+                -averageAlignment * config.divergentOuterElevation *
+                cos((shortestDistance +
+                     averageAlignment * config.divergentInnerSize) *
+                    M_PI_2f /
+                    (config.divergentOuterSize +
+                     averageAlignment * config.divergentInnerSize));
+          }
+        }
+      }
+    }
 
     // Continental shelf
     if (data.plate->continental) {
@@ -889,7 +927,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
   // https://www.youtube.com/watch?v=5lCbxMZJ4zA and
   // https://www.youtube.com/watch?v=fag48Nh8PXE)
 
-  // step 4.1: preperatory calculations
+  // step 4.1: preparatory calculations
 
   // step 4.1.1: precipitation levels
 
