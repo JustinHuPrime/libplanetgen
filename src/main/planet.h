@@ -88,6 +88,8 @@ struct TerrainData final {
   glm::vec3 centroid;
   glm::vec3 normal;
 
+  std::array<TerrainData const *, 3> neighbours;
+
   Plate const *plate;
   glm::vec3 plateMovement;
 
@@ -360,10 +362,8 @@ class EarthlikePlanet final {
   std::unique_ptr<TerrainTreeNode> data;
 
   std::vector<TerrainData const *> neighbourhoodOf(
-      TerrainData const &center, float radius, float resolution) const noexcept;
-  std::vector<TerrainData const *> narrowNeighbourhood(
-      TerrainData const &center, std::vector<TerrainData const *> const &,
-      float size) const noexcept;
+      TerrainData const &center, float searchRadius,
+      float planetRadius) const noexcept;
 };
 }  // namespace planetgen
 

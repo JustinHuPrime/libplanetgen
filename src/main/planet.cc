@@ -421,13 +421,21 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
       make_unique<IcosahedronTerrainTreeNode>(config.radius, config.resolution);
 
   // step 0.2: calculate tile centroids, normals, and initialize B-tree
-  data->forEach([](TerrainData &data) {
+  data->forEach([this](TerrainData &data) {
     data.centroid =
         accumulate(data.vertices.begin(), data.vertices.end(), vec3{0, 0, 0}) /
         3.f;
     data.normal = normalize(cross(data.vertices[1] - data.vertices[0],
                                   data.vertices[2] - data.vertices[0]));
-    // TODO: B-tree
+    data.neighbours[0] = &operator[](
+        data.vertices[0] + 1.5f * ((data.vertices[1] + data.vertices[2]) / 2.f -
+                                   data.vertices[0]));
+    data.neighbours[1] = &operator[](
+        data.vertices[1] + 1.5f * ((data.vertices[0] + data.vertices[2]) / 2.f -
+                                   data.vertices[1]));
+    data.neighbours[2] = &operator[](
+        data.vertices[2] + 1.5f * ((data.vertices[0] + data.vertices[1]) / 2.f -
+                                   data.vertices[2]));
   });
 
   // step 0.3: initialize rng
@@ -574,7 +582,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
         std::max({config.oceanicContinentalSize, config.oceanicOceanicSize,
                   config.continentalContinentalSize,
                   config.continentalShelfSize}),
-        0.5f * config.resolution);
+        config.radius);
     vector<TerrainData const *> oceanicNeighbourhood;
     copy_if(neighbourhood.begin(), neighbourhood.end(),
             back_inserter(oceanicNeighbourhood),
@@ -1010,29 +1018,32 @@ TerrainData const &EarthlikePlanet::operator[](
   return (*data)[location];
 }
 vector<TerrainData const *> EarthlikePlanet::neighbourhoodOf(
-    TerrainData const &center, float radius, float resolution) const noexcept {
-  unordered_set<TerrainData const *> set;
-  set.insert(&center);
-  // for each radius from resolution to radius in steps of resolution
-  for (float searchRadius = resolution; searchRadius < radius;
-       searchRadius += resolution) {
-    // for as many points in that circle as are needed to have coverage for the
-    // resolution
-    float circumference = 2.f * M_PIf * searchRadius;
-    float numPoints = std::max(ceil(circumference / resolution), 20.f);
-    vec3 offset =
-        normalize(center.vertices[0] - center.centroid) * searchRadius;
-    for (float angle = 0.f; angle < 2.f * M_PIf;
-         angle += 2.f * M_PIf / numPoints) {
-      // add that to the set of neighbours
-      vec3 searchPoint =
-          center.centroid + rotateVector(offset, center.normal, angle);
-      set.insert(&operator[](searchPoint));
-    }
-  }
+    TerrainData const &center, float searchRadius,
+    float planetRadius) const noexcept {
+  unordered_set<TerrainData const *> visited;
+  vector<TerrainData const *> toVisit;
+  toVisit.push_back(&center);
+  while (!toVisit.empty()) {
+    TerrainData const *curr = toVisit.back();
+    toVisit.pop_back();
 
+    if (planetRadius * angleBetween(center.centroid, curr->centroid) >
+        searchRadius) {
+      // current thing is outside the search radius; ignore this
+      continue;
+    }
+
+    if (!visited.insert(curr).second) {
+      // try to insert; if already present, continue
+      continue;
+    }
+
+    // is in the search radius and is also not visited before
+    copy(curr->neighbours.begin(), curr->neighbours.end(),
+         back_inserter(toVisit));
+  }
   vector<TerrainData const *> retval;
-  copy(set.begin(), set.end(), back_inserter(retval));
+  copy(visited.begin(), visited.end(), back_inserter(retval));
   return retval;
 }
 }  // namespace planetgen
