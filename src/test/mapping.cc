@@ -244,6 +244,7 @@ TEST_CASE("Elevation map", "[.long][.mapping]") {
                   static_cast<uint8_t>(floor(lerp(
                       255.f, 0.f,
                       data.elevation / (config.maxNoiseElevation +
+                                        config.continentalContinentalElevation +
                                         config.continentalElevationBaseline)))),
                   0, 255};
       }

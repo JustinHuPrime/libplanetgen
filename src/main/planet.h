@@ -290,17 +290,40 @@ class EarthlikePlanet final {
      */
     float oceanicElevationBaseline = -4e3f;
     /**
-     * continental shelf additional elevation (suggested -100m)
+     * Oceanic-continental convergent width (suggested 1000km)
+     */
+    float oceanicContinentalSize = 1000e3f;
+    /**
+     * Oceanic-continental convergent additional elevation (suggested 4km -
+     * continentalElevationBaseline)
+     */
+    float oceanicContinentalElevation = 3500.f;
+    /**
+     * Oceanic-oceanic convergent width (suggested 500km)
+     */
+    float oceanicOceanicSize = 500e3f;
+    /**
+     * Oceanic-oceanic convergent additional elevation (suggested 1km -
+     * oceanicElevationBaseline)
+     */
+    float oceanicOceanicElevation = 5e3f;
+    /**
+     * Continental-continental convergent width (suggested 750km)
+     */
+    float continentalContinentalSize = 750e3f;
+    /**
+     * Continental-continental convergent additional elevation (suggested 10km -
+     * continentalElevationBaseline)
+     */
+    float continentalContinentalElevation = 9500.f;
+    /**
+     * continental shelf size (suggested 1000km)
+     */
+    float continentalShelfSize = 1000e3f;
+    /**
+     * continental shelf set elevation (suggested -100m)
      */
     float continentalShelfElevation = -100.f;
-    /**
-     * continental shelf minimum size (suggested 0km)
-     */
-    float continentalShelfMinSize = 0e3f;
-    /**
-     * continental shelf maximum size (suggested 1000km)
-     */
-    float continentalShelfMaxSize = 1000e3f;
   };
 
   /**
@@ -337,7 +360,10 @@ class EarthlikePlanet final {
   std::unique_ptr<TerrainTreeNode> data;
 
   std::vector<TerrainData const *> neighbourhoodOf(
-      TerrainData const &, float radius, float resolution) const noexcept;
+      TerrainData const &center, float radius, float resolution) const noexcept;
+  std::vector<TerrainData const *> narrowNeighbourhood(
+      TerrainData const &center, std::vector<TerrainData const *> const &,
+      float size) const noexcept;
 };
 }  // namespace planetgen
 
