@@ -204,7 +204,13 @@ class IcosahedronTerrainTreeNode final : public TerrainTreeNode {
 enum class GenerationStatus : uint8_t {
   CONSTRUCTION = 0,
   TRIANGULATING,
-  TECTONIC_PLATES,
+  PLATES,
+  WINDS,
+  CURRENTS,
+  BIOMES,
+  RIVERS,
+  RESOURCES,
+  HISTORY,
   DONE,
 };
 
@@ -229,7 +235,7 @@ class EarthlikePlanet final {
      */
     size_t numMajorPlates = 8;
     /**
-     * number of minor plates to generate (suggested limits are 6-14; Earth has
+     * number of minor plates to generate (suggested limits are 15-25; Earth has
      * 10)
      */
     size_t numMinorPlates = 20;

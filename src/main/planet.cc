@@ -25,6 +25,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/epsilon.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <unordered_map>
 #include <utility>
 
 #include "perlin.h"
@@ -394,9 +395,9 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
                                  uint64_t seed, Config const &config) noexcept
     : data() {
   // step 0: initialization
+  statusReport = GenerationStatus::TRIANGULATING;
 
   // step 0.1: create map structure
-  statusReport = GenerationStatus::TRIANGULATING;
   data =
       make_unique<IcosahedronTerrainTreeNode>(config.radius, config.resolution);
 
@@ -423,6 +424,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
   // step 1: generate plates and heightmap (see
   // https://www.youtube.com/watch?v=x_Tn66PvTn4)
+  statusReport = GenerationStatus::PLATES;
 
   // step 1.1: generate plates
   uniform_real_distribution<float> zeroToOne(0.f, 1.f);
@@ -511,6 +513,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
   // step 1.3: generate heightmap
 
+  // step 1.3.1: base elevation
   // Rules:
   //
   // apply base height, then apply plate-boundary-specific changes, finally, add
@@ -616,131 +619,181 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
     // Oceanic-oceanic convergent
     if (!data.plate->continental) {
-      vector<TerrainData const *> oceanicLocalNeighbourhoodForeigners;
-      copy_if(oceanicNeighbourhood.begin(), oceanicNeighbourhood.end(),
-              back_inserter(oceanicLocalNeighbourhoodForeigners),
-              [&config, &data](TerrainData const *neighbour) {
-                return config.radius * angleBetween(data.centroid,
-                                                    neighbour->centroid) <
-                           config.oceanicOceanicSize &&
-                       neighbour->plate != data.plate;
-              });
+      unordered_map<Plate const *, vector<TerrainData const *>>
+          oceanicLocalNeighbourhoodForeigners;
+      for_each(
+          oceanicNeighbourhood.begin(), oceanicNeighbourhood.end(),
+          [&config, &data,
+           &oceanicLocalNeighbourhoodForeigners](TerrainData const *neighbour) {
+            if (config.radius *
+                        angleBetween(data.centroid, neighbour->centroid) <
+                    config.oceanicOceanicSize &&
+                neighbour->plate != data.plate) {
+              oceanicLocalNeighbourhoodForeigners[neighbour->plate].push_back(
+                  neighbour);
+            }
+          });
 
-      vector<float> oceanicDistances;
-      transform(oceanicLocalNeighbourhoodForeigners.begin(),
-                oceanicLocalNeighbourhoodForeigners.end(),
-                back_inserter(oceanicDistances),
-                [&config, &data](TerrainData const *neighbour) {
-                  return config.radius *
-                         angleBetween(data.centroid, neighbour->centroid);
-                });
+      unordered_map<Plate const *, vector<float>> oceanicDistances;
+      for_each(
+          oceanicLocalNeighbourhoodForeigners.begin(),
+          oceanicLocalNeighbourhoodForeigners.end(),
+          [&config, &data, &oceanicDistances](
+              pair<Plate const *, vector<TerrainData const *>> const &entry) {
+            transform(entry.second.begin(), entry.second.end(),
+                      back_inserter(oceanicDistances[entry.first]),
+                      [&config, &data](TerrainData const *neighbour) {
+                        return config.radius *
+                               angleBetween(data.centroid, neighbour->centroid);
+                      });
+          });
 
-      vector<size_t> oceanicPlateIndices;
-      transform(oceanicLocalNeighbourhoodForeigners.begin(),
-                oceanicLocalNeighbourhoodForeigners.end(),
-                back_inserter(oceanicPlateIndices),
-                [this](TerrainData const *neighbour) {
-                  return find_if(plates.begin(), plates.end(),
-                                 [&neighbour](Plate const &plate) {
-                                   return &plate == neighbour->plate;
-                                 }) -
-                         plates.begin();
-                });
+      unordered_map<Plate const *, size_t> oceanicPlateIndices;
+      for_each(
+          oceanicLocalNeighbourhoodForeigners.begin(),
+          oceanicLocalNeighbourhoodForeigners.end(),
+          [this, &oceanicPlateIndices](
+              pair<Plate const *, vector<TerrainData const *>> const &entry) {
+            oceanicPlateIndices[entry.first] =
+                find_if(plates.begin(), plates.end(),
+                        [&entry](Plate const &plate) {
+                          return &plate == entry.first;
+                        }) -
+                plates.begin();
+          });
       size_t currPlateIndex = find_if(plates.begin(), plates.end(),
                                       [&data](Plate const &plate) {
                                         return &plate == data.plate;
                                       }) -
                               plates.begin();
 
-      if (!oceanicDistances.empty() &&
-          currPlateIndex < *min_element(oceanicPlateIndices.begin(),
-                                        oceanicPlateIndices.end())) {
-        float shortestOceanicDistance =
-            *min_element(oceanicDistances.begin(), oceanicDistances.end());
+      data.elevation += accumulate(
+          oceanicPlateIndices.begin(), oceanicPlateIndices.end(), 0.f,
+          [&currPlateIndex, &oceanicDistances,
+           &oceanicLocalNeighbourhoodForeigners, &data,
+           &config](float rsf, pair<Plate const *, size_t> const &entry) {
+            Plate const *plate = entry.first;
+            size_t index = entry.second;
 
-        vector<float> alignments;
-        transform(oceanicLocalNeighbourhoodForeigners.begin(),
-                  oceanicLocalNeighbourhoodForeigners.end(),
-                  back_inserter(alignments),
-                  [&data](TerrainData const *neighbour) {
-                    return dot(neighbour->plateMovement - data.plateMovement,
-                               normalize(data.centroid - neighbour->centroid));
-                  });
-        float averageAlignment =
-            accumulate(alignments.begin(), alignments.end(), 0.f) /
-            static_cast<float>(alignments.size());
+            if (currPlateIndex > index) {
+              // skip if this is higher numbered
+              return rsf;
+            }
 
-        if (averageAlignment > 0.f) {
-          data.elevation +=
-              averageAlignment * config.oceanicOceanicElevation *
-              sin(shortestOceanicDistance * M_PIf / config.oceanicOceanicSize);
-        }
-      }
+            float shortestOceanicDistance = *min_element(
+                oceanicDistances[plate].begin(), oceanicDistances[plate].end());
+
+            vector<float> alignments;
+            transform(oceanicLocalNeighbourhoodForeigners[plate].begin(),
+                      oceanicLocalNeighbourhoodForeigners[plate].end(),
+                      back_inserter(alignments),
+                      [&data](TerrainData const *neighbour) {
+                        return dot(
+                            neighbour->plateMovement - data.plateMovement,
+                            normalize(data.centroid - neighbour->centroid));
+                      });
+            float averageAlignment =
+                accumulate(alignments.begin(), alignments.end(), 0.f) /
+                static_cast<float>(alignments.size());
+
+            if (averageAlignment > 0.f) {
+              return rsf + averageAlignment * config.oceanicOceanicElevation *
+                               sin(shortestOceanicDistance * M_PIf /
+                                   config.oceanicOceanicSize);
+            } else {
+              return rsf;
+            }
+          });
     }
 
     // Continental-continental convergent
     if (data.plate->continental) {
-      vector<TerrainData const *> continentalLocalNeighbourhoodForeigners;
-      copy_if(continentalNeighbourhood.begin(), continentalNeighbourhood.end(),
-              back_inserter(continentalLocalNeighbourhoodForeigners),
-              [&config, &data](TerrainData const *neighbour) {
-                return config.radius * angleBetween(data.centroid,
-                                                    neighbour->centroid) <
-                           config.continentalContinentalSize &&
-                       neighbour->plate != data.plate;
-              });
+      unordered_map<Plate const *, vector<TerrainData const *>>
+          continentalLocalNeighbourhoodForeigners;
+      for_each(continentalNeighbourhood.begin(), continentalNeighbourhood.end(),
+               [&config, &data, &continentalLocalNeighbourhoodForeigners](
+                   TerrainData const *neighbour) {
+                 if (config.radius *
+                             angleBetween(data.centroid, neighbour->centroid) <
+                         config.continentalContinentalSize &&
+                     neighbour->plate != data.plate) {
+                   continentalLocalNeighbourhoodForeigners[neighbour->plate]
+                       .push_back(neighbour);
+                 }
+               });
 
-      vector<float> continentalDistances;
-      transform(continentalLocalNeighbourhoodForeigners.begin(),
-                continentalLocalNeighbourhoodForeigners.end(),
-                back_inserter(continentalDistances),
-                [&config, &data](TerrainData const *neighbour) {
-                  return config.radius *
-                         angleBetween(data.centroid, neighbour->centroid);
-                });
+      unordered_map<Plate const *, vector<float>> continentalDistances;
+      for_each(
+          continentalLocalNeighbourhoodForeigners.begin(),
+          continentalLocalNeighbourhoodForeigners.end(),
+          [&config, &data, &continentalDistances](
+              pair<Plate const *, vector<TerrainData const *>> const &entry) {
+            transform(entry.second.begin(), entry.second.end(),
+                      back_inserter(continentalDistances[entry.first]),
+                      [&config, &data](TerrainData const *neighbour) {
+                        return config.radius *
+                               angleBetween(data.centroid, neighbour->centroid);
+                      });
+          });
 
-      vector<size_t> continentalPlateIndices;
-      transform(continentalLocalNeighbourhoodForeigners.begin(),
-                continentalLocalNeighbourhoodForeigners.end(),
-                back_inserter(continentalPlateIndices),
-                [this](TerrainData const *neighbour) {
-                  return find_if(plates.begin(), plates.end(),
-                                 [&neighbour](Plate const &plate) {
-                                   return &plate == neighbour->plate;
-                                 }) -
-                         plates.begin();
-                });
+      unordered_map<Plate const *, size_t> continentalPlateIndices;
+      for_each(
+          continentalLocalNeighbourhoodForeigners.begin(),
+          continentalLocalNeighbourhoodForeigners.end(),
+          [this, &continentalPlateIndices](
+              pair<Plate const *, vector<TerrainData const *>> const &entry) {
+            continentalPlateIndices[entry.first] =
+                find_if(plates.begin(), plates.end(),
+                        [&entry](Plate const &plate) {
+                          return &plate == entry.first;
+                        }) -
+                plates.begin();
+          });
       size_t currPlateIndex = find_if(plates.begin(), plates.end(),
                                       [&data](Plate const &plate) {
                                         return &plate == data.plate;
                                       }) -
                               plates.begin();
 
-      if (!continentalDistances.empty() &&
-          currPlateIndex < *min_element(continentalPlateIndices.begin(),
-                                        continentalPlateIndices.end())) {
-        float shortestContinentalDistance = *min_element(
-            continentalDistances.begin(), continentalDistances.end());
+      data.elevation += accumulate(
+          continentalPlateIndices.begin(), continentalPlateIndices.end(), 0.f,
+          [&currPlateIndex, &continentalDistances,
+           &continentalLocalNeighbourhoodForeigners, &data,
+           &config](float rsf, pair<Plate const *, size_t> const &entry) {
+            Plate const *plate = entry.first;
+            size_t index = entry.second;
 
-        vector<float> alignments;
-        transform(continentalLocalNeighbourhoodForeigners.begin(),
-                  continentalLocalNeighbourhoodForeigners.end(),
-                  back_inserter(alignments),
-                  [&data](TerrainData const *neighbour) {
-                    return dot(neighbour->plateMovement - data.plateMovement,
-                               normalize(data.centroid - neighbour->centroid));
-                  });
-        float averageAlignment =
-            accumulate(alignments.begin(), alignments.end(), 0.f) /
-            static_cast<float>(alignments.size());
+            if (currPlateIndex > index) {
+              // skip if this is higher numbered
+              return rsf;
+            }
 
-        if (averageAlignment > 0.f) {
-          data.elevation += averageAlignment *
-                            config.continentalContinentalElevation *
-                            sin(shortestContinentalDistance * M_PIf /
-                                config.continentalContinentalSize);
-        }
-      }
+            float shortestContinentalDistance =
+                *min_element(continentalDistances[plate].begin(),
+                             continentalDistances[plate].end());
+
+            vector<float> alignments;
+            transform(continentalLocalNeighbourhoodForeigners[plate].begin(),
+                      continentalLocalNeighbourhoodForeigners[plate].end(),
+                      back_inserter(alignments),
+                      [&data](TerrainData const *neighbour) {
+                        return dot(
+                            neighbour->plateMovement - data.plateMovement,
+                            normalize(data.centroid - neighbour->centroid));
+                      });
+            float averageAlignment =
+                accumulate(alignments.begin(), alignments.end(), 0.f) /
+                static_cast<float>(alignments.size());
+
+            if (averageAlignment > 0.f) {
+              return rsf + averageAlignment *
+                               config.continentalContinentalElevation *
+                               sin(shortestContinentalDistance * M_PIf /
+                                   config.continentalContinentalSize);
+            } else {
+              return rsf;
+            }
+          });
     }
 
     // Divergent
@@ -947,6 +1000,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
   // step 2: calculate prevailing winds (see
   // https://www.youtube.com/watch?v=LifRswfCxFU)
+  statusReport = GenerationStatus::WINDS;
 
   // step 2.1: generate trade winds
 
@@ -962,6 +1016,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
   // step 3: calculate currents (see
   // https://www.youtube.com/watch?v=n_E9UShtyY8)
+  statusReport = GenerationStatus::WINDS;
 
   // step 3.1: equatorial gyres
 
@@ -986,6 +1041,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
   // step 4: calculate biomes and climate (see
   // https://www.youtube.com/watch?v=5lCbxMZJ4zA and
   // https://www.youtube.com/watch?v=fag48Nh8PXE)
+  statusReport = GenerationStatus::BIOMES;
 
   // step 4.1: preparatory calculations
 
@@ -1021,6 +1077,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
   // step 5: generate rivers (see
   // https://www.youtube.com/watch?v=cqMiMKnYk5E)
+  statusReport = GenerationStatus::RIVERS;
 
   // step 5.1: drainage basins
 
@@ -1040,6 +1097,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
 
   // step 6: calculate resource distribution (see
   // https://www.youtube.com/watch?v=b9qvQspSbWc)
+  statusReport = GenerationStatus::RESOURCES;
 
   // step 6.1: calculate historical heightmap
 
@@ -1072,6 +1130,7 @@ EarthlikePlanet::EarthlikePlanet(atomic<GenerationStatus> &statusReport,
   // TODO
 
   // step 7: generate world history
+  statusReport = GenerationStatus::HISTORY;
 
   // step 7.1: generate classical empires
 
